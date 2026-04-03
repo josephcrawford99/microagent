@@ -47,11 +47,16 @@ if echo "$AUTH_OUT" | grep -q '"loggedIn": true'; then
 else
     echo "not authenticated."
     echo ""
-    echo "running claude auth login inside the container..."
-    echo "look for a URL below — open it in any browser."
-    echo "after authorizing, paste the code back here."
+    # restore config backup if it exists (avoids noisy warnings)
+    run_cmd -T microagent sh -c '
+        BACKUP=$(ls /root/.claude/backups/.claude.json.backup.* 2>/dev/null | tail -1)
+        [ -n "$BACKUP" ] && cp "$BACKUP" /root/.claude.json
+    ' 2>/dev/null || true
+    # run login interactively — URL will appear, paste the code after authorizing
+    echo "a URL will appear below. open it in any browser and authorize."
+    echo "then paste the code you receive back here and press enter."
     echo ""
-    run_cmd -i microagent claude auth login
+    run_cmd -i microagent sh -c 'claude auth login 2>&1; echo ""; echo "press enter to continue..."; read _'
     echo ""
     # verify
     AUTH_OUT=$(run_cmd -T microagent claude auth status 2>&1 || true)
