@@ -1,0 +1,99 @@
+#!/bin/sh
+set -e
+
+echo "=== microagent setup ==="
+echo ""
+
+# Detect compose command (v2 plugin vs v1 standalone)
+if docker compose version >/dev/null 2>&1; then
+    DC="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+    DC="docker-compose"
+else
+    echo "ERROR: neither 'docker compose' nor 'docker-compose' found."
+    echo "  brew install docker docker-compose"
+    exit 1
+fi
+
+# Check docker daemon
+if ! docker info >/dev/null 2>&1; then
+    # Try starting colima if available
+    if command -v colima >/dev/null 2>&1; then
+        echo "docker daemon not running, starting colima..."
+        colima start
+    else
+        echo "ERROR: docker daemon not running."
+        echo "  install colima: brew install colima"
+        echo "  then: colima start"
+        exit 1
+    fi
+fi
+
+echo "using: $DC"
+echo ""
+
+echo "[1/5] building image..."
+$DC build
+
+echo ""
+echo "[2/5] checking claude auth..."
+AUTH_OK=$($DC run --rm -T microagent sh -c 'claude auth status 2>&1 | grep -c "loggedIn.*true"' 2>/dev/null || echo "0")
+if [ "$AUTH_OK" = "0" ]; then
+    echo "no auth found — starting claude login..."
+    echo "a URL will appear. open it on any device and authorize."
+    echo ""
+    $DC run --rm microagent claude /login
+    echo ""
+fi
+
+echo "[3/5] verifying auth..."
+if $DC run --rm -T microagent sh -c 'echo "ping" | claude -p' >/dev/null 2>&1; then
+    echo "auth OK"
+else
+    echo "ERROR: claude auth failed. run setup.sh again."
+    exit 1
+fi
+
+echo ""
+echo "[4/5] health check with ping agent..."
+$DC run --rm -T microagent sh -c '
+    mkdir -p /data/interfaces/terminal/inbox /data/interfaces/terminal/outbox
+    echo "{\"id\":\"health\",\"channel\":\"terminal\",\"from\":\"setup\",\"to\":\"agent\",\"body\":\"ping\",\"thread\":\"healthcheck\"}" > /data/interfaces/terminal/inbox/health.json
+    cd /app/src
+    python3 -c "
+import sys, os
+sys.path.insert(0, \".\")
+os.environ[\"SOUL_DIR\"] = \"/soul\"
+os.environ[\"DATA_DIR\"] = \"/data\"
+from lib.config import load_config, load_soul_prompt
+from agent_types.ping import Ping
+from lib.messages import read_message
+msg = read_message(\"/data/interfaces/terminal/inbox/health.json\")
+agent = Ping(load_config(), load_soul_prompt(), \"/data\")
+result = agent.wake([msg])
+os.remove(\"/data/interfaces/terminal/inbox/health.json\")
+if result == \"pong\":
+    print(\"health check passed\")
+    sys.exit(0)
+else:
+    print(\"health check FAILED: expected pong, got \" + str(result))
+    sys.exit(1)
+"
+'
+if [ $? -ne 0 ]; then
+    echo "ERROR: health check failed"
+    exit 1
+fi
+
+echo ""
+echo "[5/5] starting microagent..."
+$DC up -d
+
+echo ""
+echo "=== microagent is running ==="
+echo ""
+echo "  status:  $DC ps"
+echo "  logs:    $DC logs -f"
+echo "  talk:    python3 talk.py"
+echo "  stop:    $DC down"
+echo ""
