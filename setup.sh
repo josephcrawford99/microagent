@@ -32,30 +32,29 @@ fi
 echo "using: $DC"
 echo ""
 
-echo "[1/5] building image..."
+echo "[1/4] building image..."
 $DC build
 
 echo ""
-echo "[2/5] checking claude auth..."
-AUTH_OK=$($DC run --rm -T microagent sh -c 'claude auth status 2>&1 | grep -c "loggedIn.*true"' 2>/dev/null || echo "0")
-if [ "$AUTH_OK" = "0" ]; then
-    echo "no auth found — starting claude login..."
+echo "[2/4] checking claude auth..."
+if $DC run --rm -T microagent claude auth status >/dev/null 2>&1; then
+    echo "already authenticated"
+else
+    echo "not authenticated — starting claude login..."
     echo "a URL will appear. open it on any device and authorize."
     echo ""
     $DC run --rm microagent claude /login
     echo ""
-fi
-
-echo "[3/5] verifying auth..."
-if $DC run --rm -T microagent sh -c 'echo "ping" | claude -p' >/dev/null 2>&1; then
+    # verify it worked
+    if ! $DC run --rm -T microagent claude auth status >/dev/null 2>&1; then
+        echo "ERROR: claude auth failed. run setup.sh again."
+        exit 1
+    fi
     echo "auth OK"
-else
-    echo "ERROR: claude auth failed. run setup.sh again."
-    exit 1
 fi
 
 echo ""
-echo "[4/5] health check with ping agent..."
+echo "[3/4] health check with ping agent..."
 $DC run --rm -T microagent sh -c '
     mkdir -p /data/interfaces/terminal/inbox /data/interfaces/terminal/outbox
     echo "{\"id\":\"health\",\"channel\":\"terminal\",\"from\":\"setup\",\"to\":\"agent\",\"body\":\"ping\",\"thread\":\"healthcheck\"}" > /data/interfaces/terminal/inbox/health.json
@@ -86,7 +85,7 @@ if [ $? -ne 0 ]; then
 fi
 
 echo ""
-echo "[5/5] starting microagent..."
+echo "[4/4] starting microagent..."
 $DC up -d
 
 echo ""
