@@ -8,8 +8,8 @@ services:
       - ./soul:/soul:ro
       # Persistent agent data
       - agent-data:/data
-      # Claude CLI credentials — persisted so OAuth survives restarts
-      - claude-creds:/root/.claude
+      # Claude CLI home — persists .claude/ and .claude.json across restarts
+      - claude-home:/root
     environment:
       - SOUL_DIR=/soul
       - DATA_DIR=/data
@@ -18,4 +18,4 @@ services:
 
 volumes:
   agent-data:
-  claude-creds:
+  claude-home:

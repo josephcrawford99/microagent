@@ -47,10 +47,20 @@ if echo "$AUTH_OUT" | grep -q '"loggedIn": true'; then
 else
     echo "not authenticated."
     echo ""
+    # fix broken .claude.json if backup exists
+    run_cmd -T microagent sh -c '
+        if [ ! -f /root/.claude.json ]; then
+            BACKUP=$(ls -t /root/.claude/backups/.claude.json.backup.* 2>/dev/null | head -1)
+            if [ -n "$BACKUP" ]; then
+                cp "$BACKUP" /root/.claude.json
+            else
+                echo "{}" > /root/.claude.json
+            fi
+        fi
+    '
     echo "running interactive login. a URL will appear."
     echo "open it in any browser, authorize, then paste the code back."
     echo ""
-    # -it allocates a TTY so claude's TUI can accept paste input
     $DC run --rm -it --entrypoint "" microagent claude auth login
     echo ""
     # verify
