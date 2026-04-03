@@ -40,10 +40,23 @@ echo "[2/4] checking claude auth..."
 if $DC run --rm -T microagent claude auth status >/dev/null 2>&1; then
     echo "already authenticated"
 else
-    echo "not authenticated — starting claude login..."
-    echo "a URL will appear. open it on any device and authorize."
+    echo "not authenticated."
     echo ""
-    $DC run --rm microagent claude /login
+    echo "choose auth method:"
+    echo "  1) browser login (will show a URL you can open on any device)"
+    echo "  2) setup-token (paste a long-lived token, good for headless/SSH)"
+    echo ""
+    printf "enter 1 or 2: "
+    read AUTH_METHOD
+    echo ""
+    case "$AUTH_METHOD" in
+        2)
+            $DC run --rm microagent claude setup-token
+            ;;
+        *)
+            $DC run --rm microagent claude auth login
+            ;;
+    esac
     echo ""
     # verify it worked
     if ! $DC run --rm -T microagent claude auth status >/dev/null 2>&1; then
