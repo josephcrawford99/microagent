@@ -31,41 +31,12 @@ fi
 echo "using: $DC"
 echo ""
 
-# Helper: run a command in the container without the entrypoint
-run_cmd() {
-    $DC run --rm --entrypoint "" "$@"
-}
-
-echo "[1/4] building image..."
+echo "[1/3] building image..."
 $DC build
 
 echo ""
-echo "[2/4] checking claude auth..."
-AUTH_OUT=$(run_cmd -T microagent claude auth status 2>&1 || true)
-if echo "$AUTH_OUT" | grep -q '"loggedIn": true'; then
-    echo "already authenticated"
-else
-    echo "not authenticated."
-    echo ""
-    run_cmd -T microagent sh -c '[ -f /root/.claude.json ] || echo "{}" > /root/.claude.json'
-    echo "run 'claude setup-token' to get a long-lived token."
-    echo "this uses your Max subscription — no API key needed."
-    echo ""
-    $DC run --rm -it --entrypoint "" microagent claude setup-token
-    echo ""
-    # verify
-    AUTH_OUT=$(run_cmd -T microagent claude auth status 2>&1 || true)
-    if echo "$AUTH_OUT" | grep -q '"loggedIn": true'; then
-        echo "auth OK"
-    else
-        echo "ERROR: auth failed. run setup.sh again."
-        exit 1
-    fi
-fi
-
-echo ""
-echo "[3/4] health check with ping agent..."
-run_cmd -T microagent sh -c '
+echo "[2/3] health check with ping agent..."
+$DC run --rm -T --entrypoint "" microagent sh -c '
     mkdir -p /data/interfaces/terminal/inbox /data/interfaces/terminal/outbox
     echo "{\"id\":\"health\",\"channel\":\"terminal\",\"from\":\"setup\",\"to\":\"agent\",\"body\":\"ping\",\"thread\":\"healthcheck\"}" > /data/interfaces/terminal/inbox/health.json
     cd /app/src
@@ -93,7 +64,7 @@ if [ $? -ne 0 ]; then
 fi
 
 echo ""
-echo "[4/4] starting microagent..."
+echo "[3/3] starting microagent..."
 $DC up -d
 
 echo ""
@@ -103,4 +74,7 @@ echo "  status:  $DC ps"
 echo "  logs:    $DC logs -f"
 echo "  talk:    python3 talk.py"
 echo "  stop:    $DC down"
+echo ""
+echo "if using the claude agent type, send your first message."
+echo "if not authenticated, the agent will tell you what to do."
 echo ""
