@@ -45,10 +45,13 @@ AUTH_OUT=$(run_cmd -T microagent claude auth status 2>&1 || true)
 if echo "$AUTH_OUT" | grep -q '"loggedIn": true'; then
     echo "already authenticated"
 else
-    echo "not authenticated. running claude auth login..."
-    echo "a URL and code will appear. open the URL on any device."
+    echo "not authenticated."
     echo ""
-    run_cmd microagent claude auth login
+    echo "running claude auth login inside the container..."
+    echo "look for a URL below — open it in any browser."
+    echo "after authorizing, paste the code back here."
+    echo ""
+    run_cmd -i microagent claude auth login
     echo ""
     # verify
     AUTH_OUT=$(run_cmd -T microagent claude auth status 2>&1 || true)
