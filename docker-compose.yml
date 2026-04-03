@@ -4,15 +4,11 @@ services:
     container_name: microagent
     restart: unless-stopped
     volumes:
-      # Soul directory — read-only personality and config
       - ./soul:/soul:ro
-      # Persistent agent data (includes claude_token)
       - agent-data:/data
     environment:
       - SOUL_DIR=/soul
       - DATA_DIR=/data
-      # Email credentials (uncomment and set when using email interface)
-      # - EMAIL_PASSWORD=your-app-password-here
 
 volumes:
   agent-data:

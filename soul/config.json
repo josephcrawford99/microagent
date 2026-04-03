@@ -19,7 +19,9 @@
       "username": "agent@example.com",
       "password_env": "EMAIL_PASSWORD",
       "poll_interval": 30,
-      "allowed_senders": ["joey@example.com"]
+      "allowed_senders": [
+        "joey@example.com"
+      ]
     }
   }
 }

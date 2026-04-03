@@ -9,11 +9,12 @@ import fcntl
 import logging
 import os
 import sys
+import time
 
 from agent_types import AGENT_TYPES
 from interfaces import INTERFACES
 from lib.config import load_config, load_soul_prompt, DATA_DIR
-from lib.messages import read_message, list_messages, make_message, write_message
+from lib.messages import read_message, list_messages
 from lib.sessions import get_session_id
 
 logging.basicConfig(
@@ -49,7 +50,7 @@ def load_agent():
     if name not in AGENT_TYPES:
         raise RuntimeError(f"unknown agent type '{name}', available: {list(AGENT_TYPES)}")
     log.info("loaded agent: %s", name)
-    return AGENT_TYPES[name](config, load_soul_prompt(), DATA_DIR)
+    return AGENT_TYPES[name](config, load_soul_prompt(), DATA_DIR, interfaces)
 
 
 def load_interfaces():
@@ -81,32 +82,13 @@ def collect_inbox():
     return messages
 
 
-def send_response(response_text, source_msg):
-    iface_name = source_msg.get("_source_interface")
-    iface = next((i for i in interfaces if i.name == iface_name), None)
-    if not iface:
-        log.warning("no interface %s, dropping response", iface_name)
-        return
-    reply = make_message(
-        channel=iface_name,
-        sender="agent",
-        recipient=source_msg.get("from", ""),
-        body=response_text,
-        subject=f"Re: {source_msg.get('subject', '')}",
-        thread=source_msg.get("thread"),
-    )
-    iface.send(write_message(iface.outbox_dir, reply))
-
-
 def process_messages(messages):
     if not messages:
         return
     thread = messages[0].get("thread", f"default_{int(time.time())}")
     ttl = config.get("session_ttl", "daily")
     session_id = get_session_id(DATA_DIR, thread, ttl=ttl)
-    response = agent.wake(messages, session_id=session_id)
-    if response:
-        send_response(response, messages[0])
+    agent.wake(messages, session_id=session_id)
     for msg in messages:
         path = msg.get("_source_path")
         if path and os.path.exists(path):
@@ -122,8 +104,8 @@ def run():
 
     try:
         config = load_config()
-        agent = load_agent()
         interfaces = load_interfaces()
+        agent = load_agent()
 
         log.info("microagent waking | agent=%s interfaces=%s",
                  config.get("agent_type"), [i.name for i in interfaces])
@@ -134,9 +116,7 @@ def run():
             process_messages(messages)
         else:
             log.info("no messages, autonomous wake")
-            response = agent.wake([], session_id=None)
-            if response:
-                log.info("autonomous response: %s", response[:200])
+            agent.wake([], session_id=None)
 
         log.info("done, exiting")
 

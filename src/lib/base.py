@@ -9,20 +9,18 @@ class AgentType:
 
     name: str  # must be set by subclass
 
-    def __init__(self, config, soul_prompt, data_dir):
+    def __init__(self, config, soul_prompt, data_dir, interfaces):
         self.config = config
         self.soul_prompt = soul_prompt
         self.data_dir = data_dir
+        self.interfaces = interfaces  # list of Interface instances
 
     def wake(self, messages, session_id=None):
-        """Process incoming messages and return a response string, or None to stay silent.
+        """Process incoming messages. Send responses via self.interfaces directly.
 
         Args:
             messages: list of message dicts from inboxes
             session_id: optional session identifier for conversation continuity
-
-        Returns:
-            Response string, or None if no response should be sent.
         """
         raise NotImplementedError
 

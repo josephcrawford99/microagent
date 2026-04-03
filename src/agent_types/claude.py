@@ -3,11 +3,12 @@ import logging
 import os
 import subprocess
 from lib.base import AgentType
+from lib.messages import make_message, write_message
 from lib.sessions import save_session_id
 
 log = logging.getLogger("microagent.claude")
 
-TOKEN_PATH = os.path.join(os.environ.get("DATA_DIR", "/data"), "claude_token")
+AUTH_ERROR_HINTS = ["not logged in", "invalid_api_key", "authentication", "unauthorized"]
 
 
 class Claude(AgentType):
@@ -19,32 +20,37 @@ class Claude(AgentType):
         log.info("claude agent woke up | messages=%d session=%s", len(messages), session_id)
 
         if not messages:
-            log.info("no messages, nothing to do")
-            return None
+            return
 
-        # Check auth before trying
-        if not self._has_auth():
-            log.warning("no claude auth token found")
-            return (
-                "I'm not authenticated yet. Please run this on the server:\n\n"
-                "  claude setup-token\n\n"
-                "Then paste the token into a message to me."
-            )
-
-        # Check if the message is a token being pasted
         body = messages[0].get("body", "").strip()
-        if body.startswith("eyJ") and len(body) > 100:
-            self._save_token(body)
-            log.info("oauth token saved")
-            return "Token saved. I'm authenticated now."
 
-        prompt = self._build_conversation_prompt(messages)
+        # No token — treat this message as a token attempt
+        if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = body
+            if self._ping():
+                log.info("token accepted")
+                self._reply("Authenticated. Send your message again.", messages[0])
+            else:
+                os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+                log.warning("token rejected")
+                self._broadcast("Auth failed. Run `claude setup-token` and paste the token here.")
+            return
+
+        # Have token — try the real command
+        result = self._run_claude(messages, session_id)
+        if result == "auth_failed":
+            os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+            log.warning("auth expired, cleared token")
+            self._broadcast("Auth expired. Run `claude setup-token` and paste the token here.")
+            return
+
+        if result:
+            self._reply(result, messages[0])
+
+    def _run_claude(self, messages, session_id):
+        """Run claude CLI. Returns response text, 'auth_failed', or None."""
+        prompt = self._build_prompt(messages)
         thread = messages[0].get("thread")
-
-        env = os.environ.copy()
-        token = self._load_token()
-        if token:
-            env["CLAUDE_CODE_OAUTH_TOKEN"] = token
 
         cmd = ["claude", "-p", "--output-format", "json"]
         if session_id:
@@ -54,12 +60,8 @@ class Claude(AgentType):
 
         try:
             result = subprocess.run(
-                cmd,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                env=env,
+                cmd, input=prompt, capture_output=True, text=True, timeout=120,
+                env={**os.environ},
             )
         except subprocess.TimeoutExpired:
             log.error("claude timed out after 120s")
@@ -69,21 +71,10 @@ class Claude(AgentType):
             return None
 
         if result.returncode != 0:
-            stderr = result.stderr.strip()
-            # Check for auth errors in stdout too (JSON response)
-            try:
-                data = json.loads(result.stdout)
-                if data.get("is_error") and "Not logged in" in data.get("result", ""):
-                    self._clear_token()
-                    log.warning("token expired or invalid, cleared")
-                    return (
-                        "My auth token expired. Please run on the server:\n\n"
-                        "  claude setup-token\n\n"
-                        "Then paste the new token to me."
-                    )
-            except (json.JSONDecodeError, KeyError):
-                pass
-            log.error("claude exited %d: %s", result.returncode, stderr)
+            combined = (result.stdout + result.stderr).lower()
+            if any(hint in combined for hint in AUTH_ERROR_HINTS):
+                return "auth_failed"
+            log.error("claude exited %d: %s", result.returncode, result.stderr.strip())
             return None
 
         try:
@@ -92,7 +83,6 @@ class Claude(AgentType):
             log.error("failed to parse claude JSON output")
             return result.stdout.strip() or None
 
-        # Save session ID for future resumption
         new_session_id = data.get("session_id")
         if new_session_id and thread:
             save_session_id(self.data_dir, thread, new_session_id)
@@ -103,25 +93,47 @@ class Claude(AgentType):
             log.info("claude responded (%d chars)", len(response))
         return response or None
 
-    def _has_auth(self):
-        return bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or self._load_token())
+    def _ping(self):
+        """Verify auth with a trivial claude call."""
+        try:
+            result = subprocess.run(
+                ["claude", "-p", "--output-format", "json"],
+                input="respond with exactly: ok",
+                capture_output=True, text=True, timeout=30,
+                env={**os.environ},
+            )
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
 
-    def _load_token(self):
-        if os.path.exists(TOKEN_PATH):
-            with open(TOKEN_PATH) as f:
-                return f.read().strip()
-        return None
+    def _reply(self, body, source_msg):
+        """Send a response to the interface the message came from."""
+        iface_name = source_msg.get("_source_interface")
+        iface = next((i for i in self.interfaces if i.name == iface_name), None)
+        if not iface:
+            log.warning("no interface %s, dropping response", iface_name)
+            return
+        reply = make_message(
+            channel=iface_name,
+            sender="agent",
+            recipient=source_msg.get("from", ""),
+            body=body,
+            thread=source_msg.get("thread"),
+        )
+        iface.send(write_message(iface.outbox_dir, reply))
 
-    def _save_token(self, token):
-        with open(TOKEN_PATH, "w") as f:
-            f.write(token.strip())
-        os.chmod(TOKEN_PATH, 0o600)
+    def _broadcast(self, body):
+        """Send a message to all interfaces."""
+        for iface in self.interfaces:
+            msg = make_message(
+                channel=iface.name,
+                sender="agent",
+                recipient="",
+                body=body,
+            )
+            iface.send(write_message(iface.outbox_dir, msg))
 
-    def _clear_token(self):
-        if os.path.exists(TOKEN_PATH):
-            os.remove(TOKEN_PATH)
-
-    def _build_conversation_prompt(self, messages):
+    def _build_prompt(self, messages):
         parts = [self.soul_prompt, "", "---", ""]
         for msg in messages:
             sender = msg.get("from", "unknown")
