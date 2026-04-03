@@ -47,16 +47,11 @@ if echo "$AUTH_OUT" | grep -q '"loggedIn": true'; then
 else
     echo "not authenticated."
     echo ""
-    # restore config backup if it exists (avoids noisy warnings)
-    run_cmd -T microagent sh -c '
-        BACKUP=$(ls /root/.claude/backups/.claude.json.backup.* 2>/dev/null | tail -1)
-        [ -n "$BACKUP" ] && cp "$BACKUP" /root/.claude.json
-    ' 2>/dev/null || true
-    # run login interactively — URL will appear, paste the code after authorizing
-    echo "a URL will appear below. open it in any browser and authorize."
-    echo "then paste the code you receive back here and press enter."
+    echo "running interactive login. a URL will appear."
+    echo "open it in any browser, authorize, then paste the code back."
     echo ""
-    run_cmd -i microagent sh -c 'claude auth login 2>&1; echo ""; echo "press enter to continue..."; read _'
+    # -it allocates a TTY so claude's TUI can accept paste input
+    $DC run --rm -it --entrypoint "" microagent claude auth login
     echo ""
     # verify
     AUTH_OUT=$(run_cmd -T microagent claude auth status 2>&1 || true)
