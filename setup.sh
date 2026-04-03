@@ -17,7 +17,6 @@ fi
 
 # Check docker daemon
 if ! docker info >/dev/null 2>&1; then
-    # Try starting colima if available
     if command -v colima >/dev/null 2>&1; then
         echo "docker daemon not running, starting colima..."
         colima start
@@ -32,51 +31,44 @@ fi
 echo "using: $DC"
 echo ""
 
+# Helper: run a command in the container without the entrypoint
+run_cmd() {
+    $DC run --rm --entrypoint "" "$@"
+}
+
 echo "[1/4] building image..."
 $DC build
 
 echo ""
 echo "[2/4] checking claude auth..."
-if $DC run --rm -T microagent claude auth status >/dev/null 2>&1; then
+AUTH_OUT=$(run_cmd -T microagent claude auth status 2>&1 || true)
+if echo "$AUTH_OUT" | grep -q '"loggedIn": true'; then
     echo "already authenticated"
 else
-    echo "not authenticated."
+    echo "not authenticated. running claude auth login..."
+    echo "a URL and code will appear. open the URL on any device."
     echo ""
-    echo "choose auth method:"
-    echo "  1) browser login (will show a URL you can open on any device)"
-    echo "  2) setup-token (paste a long-lived token, good for headless/SSH)"
+    run_cmd microagent claude auth login
     echo ""
-    printf "enter 1 or 2: "
-    read AUTH_METHOD
-    echo ""
-    case "$AUTH_METHOD" in
-        2)
-            $DC run --rm microagent claude setup-token
-            ;;
-        *)
-            $DC run --rm microagent claude auth login
-            ;;
-    esac
-    echo ""
-    # verify it worked
-    if ! $DC run --rm -T microagent claude auth status >/dev/null 2>&1; then
-        echo "ERROR: claude auth failed. run setup.sh again."
+    # verify
+    AUTH_OUT=$(run_cmd -T microagent claude auth status 2>&1 || true)
+    if echo "$AUTH_OUT" | grep -q '"loggedIn": true'; then
+        echo "auth OK"
+    else
+        echo "ERROR: auth failed. run setup.sh again."
         exit 1
     fi
-    echo "auth OK"
 fi
 
 echo ""
 echo "[3/4] health check with ping agent..."
-$DC run --rm -T microagent sh -c '
+run_cmd -T microagent sh -c '
     mkdir -p /data/interfaces/terminal/inbox /data/interfaces/terminal/outbox
     echo "{\"id\":\"health\",\"channel\":\"terminal\",\"from\":\"setup\",\"to\":\"agent\",\"body\":\"ping\",\"thread\":\"healthcheck\"}" > /data/interfaces/terminal/inbox/health.json
     cd /app/src
-    python3 -c "
+    SOUL_DIR=/soul DATA_DIR=/data python3 -c "
 import sys, os
 sys.path.insert(0, \".\")
-os.environ[\"SOUL_DIR\"] = \"/soul\"
-os.environ[\"DATA_DIR\"] = \"/data\"
 from lib.config import load_config, load_soul_prompt
 from agent_types.ping import Ping
 from lib.messages import read_message
