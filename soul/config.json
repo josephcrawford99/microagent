@@ -8,15 +8,15 @@
       "enabled": true
     },
     "email": {
-      "enabled": false,
+      "enabled": true,
       "imap_host": "imap.gmail.com",
       "imap_port": 993,
       "smtp_host": "smtp.gmail.com",
       "smtp_port": 587,
-      "username": "agent@example.com",
+      "username": "joey.microagent@gmail.com",
       "password_env": "EMAIL_PASSWORD",
       "allowed_senders": [
-        "joey@example.com"
+        "josephcrawford99@gmail.com"
       ]
     }
   }

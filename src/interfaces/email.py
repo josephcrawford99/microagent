@@ -53,10 +53,7 @@ class Email(Interface):
         try:
             imap = self._imap()
             try:
-                status, data = imap.search(None, "UNSEEN")
-                if status != "OK":
-                    return None
-                count = len(data[0].split())
+                count = self._count_actionable_unread(imap)
             finally:
                 imap.close()
                 imap.logout()
@@ -66,6 +63,28 @@ class Email(Interface):
         if count == 0:
             return None
         return EmailTrigger(interface=self, unread=count)
+
+    def _count_actionable_unread(self, imap) -> int:
+        """Count unread messages we'd actually act on.
+
+        Without `allowed_senders`, every unread email is a wake. With it set,
+        only unread mail from those addresses counts — so newsletters, account
+        notices, and spam can't burn a no-op wake (which costs real money once
+        the agent is Claude).
+        """
+        if not self.allowed_senders:
+            status, data = imap.search(None, "UNSEEN")
+            if status != "OK":
+                return 0
+            return len(data[0].split())
+
+        ids: set[bytes] = set()
+        for sender in self.allowed_senders:
+            status, data = imap.search(None, "UNSEEN", "FROM", f'"{sender}"')
+            if status != "OK":
+                continue
+            ids.update(data[0].split())
+        return len(ids)
 
     # --- I/O ---
 

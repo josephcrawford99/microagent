@@ -15,6 +15,7 @@ services:
       # line into a .env file next to docker-compose.yml as:
       #   CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD:-}
 
 volumes:
   agent-data:

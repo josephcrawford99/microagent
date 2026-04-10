@@ -47,7 +47,12 @@ class Claude(AgentType):
         )
         prompt = (
             f"You have been woken. Active triggers: {summary}.\n"
-            "Use your interface tools to read pending messages and respond as needed. "
+            "Your interface tools (e.g. mcp__interfaces__email_receive, "
+            "mcp__interfaces__terminal_send) are already loaded and ready — "
+            "call them directly. Do not use ToolSearch or try to load tool "
+            "schemas first; the MCP tools you need are listed in your tool set "
+            "from the start.\n"
+            "Use them to read pending messages and respond as needed. "
             "Keep replies concise. If there is nothing meaningful to do, stop."
         )
 
