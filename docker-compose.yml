@@ -9,6 +9,12 @@ services:
     environment:
       - SOUL_DIR=/soul
       - DATA_DIR=/data
+      # OAuth token for the Claude SDK. Get one with:
+      #   docker compose run --rm -it microagent claude setup-token
+      # Copy the value from the printed `export CLAUDE_CODE_OAUTH_TOKEN=...`
+      # line into a .env file next to docker-compose.yml as:
+      #   CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
 
 volumes:
   agent-data:

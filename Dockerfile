@@ -2,10 +2,9 @@ FROM python:3.12-alpine
 
 RUN apk add --no-cache nodejs npm
 RUN npm install -g @anthropic-ai/claude-code
+RUN pip install --no-cache-dir claude-agent-sdk
 
 COPY src/ /app/src/
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh /app/src/inbox_trigger.sh
 
-WORKDIR /app
-ENTRYPOINT ["/app/entrypoint.sh"]
+WORKDIR /app/src
+CMD ["python3", "-u", "main.py"]

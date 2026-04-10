@@ -2,9 +2,6 @@
   "user": {
     "name": "Joey"
   },
-  "schedule": "*/30 7-23 * * *",
-  "idle_timeout": 300,
-  "session_ttl": "daily",
   "agent_type": "claude",
   "interfaces": {
     "terminal": {
@@ -18,7 +15,6 @@
       "smtp_port": 587,
       "username": "agent@example.com",
       "password_env": "EMAIL_PASSWORD",
-      "poll_interval": 30,
       "allowed_senders": [
         "joey@example.com"
       ]

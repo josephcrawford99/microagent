@@ -1,6 +1,6 @@
 import importlib
 import pkgutil
-from lib.base import AgentType
+from lib.agent import AgentType
 
 AGENT_TYPES = {}
 

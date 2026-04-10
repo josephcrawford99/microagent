@@ -1,6 +1,6 @@
 import importlib
 import pkgutil
-from lib.base import Interface
+from lib.interface import Interface
 
 INTERFACES = {}
 
