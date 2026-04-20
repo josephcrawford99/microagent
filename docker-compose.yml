@@ -5,12 +5,15 @@ services:
     restart: unless-stopped
     ports:
       - "8765:8765"
+      - "8766:8766"
     volumes:
+      - .:/repo
       - ./soul:/soul:ro
       - agent-data:/data
     environment:
       - SOUL_DIR=/soul
       - DATA_DIR=/data
+      - REPO_DIR=/repo
       # OAuth token for the Claude SDK. Get one with:
       #   docker compose run --rm -it microagent claude setup-token
       # Copy the value from the printed `export CLAUDE_CODE_OAUTH_TOKEN=...`
@@ -18,6 +21,7 @@ services:
       #   CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - EMAIL_PASSWORD=${EMAIL_PASSWORD:-}
+      - META_TOKEN=${META_TOKEN:-}
 
 volumes:
   agent-data:

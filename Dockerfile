@@ -1,10 +1,8 @@
 FROM python:3.12-alpine
 
-RUN apk add --no-cache nodejs npm
+RUN apk add --no-cache nodejs npm git
 RUN npm install -g @anthropic-ai/claude-code
-RUN pip install --no-cache-dir claude-agent-sdk
+RUN pip install --no-cache-dir claude-agent-sdk python-dotenv
 
-COPY src/ /app/src/
-
-WORKDIR /app/src
+WORKDIR /repo/src
 CMD ["python3", "-u", "main.py"]

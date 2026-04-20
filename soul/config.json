@@ -28,6 +28,14 @@
       "allowed_senders": [
         "josephcrawford99@gmail.com"
       ]
+    },
+    "meta": {
+      "enabled": true,
+      "token_env": "META_TOKEN",
+      "branch": "main",
+      "sources": {
+        "socket": { "host": "0.0.0.0", "port": 8766 }
+      }
     }
   }
 }

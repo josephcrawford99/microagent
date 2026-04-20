@@ -10,6 +10,12 @@ import asyncio
 import logging
 import os
 
+from dotenv import load_dotenv
+
+# Load .env before anything reads os.environ — so a restart after an `!env`
+# meta-command picks up the new values without needing `docker compose up`.
+load_dotenv(os.path.join(os.environ.get("REPO_DIR", "/repo"), ".env"))
+
 from agent_types import AGENT_TYPES
 from interfaces import INTERFACES
 from lib.config import DATA_DIR, load_config
