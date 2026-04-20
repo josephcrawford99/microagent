@@ -3,6 +3,8 @@ services:
     build: .
     container_name: microagent
     restart: unless-stopped
+    ports:
+      - "8765:8765"
     volumes:
       - ./soul:/soul:ro
       - agent-data:/data

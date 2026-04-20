@@ -3,9 +3,19 @@
     "name": "Joey"
   },
   "agent_type": "claude",
+  "agents": {
+    "claude": {
+      "rotation_time": "03:00"
+    }
+  },
   "interfaces": {
     "terminal": {
       "enabled": true
+    },
+    "socket": {
+      "enabled": true,
+      "host": "0.0.0.0",
+      "port": 8765
     },
     "email": {
       "enabled": true,
