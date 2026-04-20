@@ -1,8 +1,14 @@
 import json
 from dataclasses import asdict, dataclass
-from typing import ClassVar, Optional
+from typing import Any, ClassVar, Optional
 
-from claude_agent_sdk import tool
+from claude_agent_sdk import SdkMcpTool, tool
+
+# The SDK's @tool decorator hands handlers a dict[str, Any] and expects a
+# dict[str, Any] back — aliases keep our signatures honest without
+# redefining the SDK's contract.
+ToolArgs = dict[str, Any]
+ToolResult = dict[str, Any]
 
 
 @dataclass
@@ -22,7 +28,7 @@ class Message:
     to: str = ""
     sender: str = ""
 
-    SCHEMA: ClassVar[dict] = {"body": str}
+    SCHEMA: ClassVar[dict[str, type]] = {"body": str}
 
 
 @dataclass
@@ -36,47 +42,25 @@ class Interface:
     """Base for communication interfaces.
 
     Subclasses set `name`, optionally set `message_class` (defaults to Message),
-    and implement trigger_wake(), receive(), and send(). The default tools()
-    auto-generates `{name}_receive` and `{name}_send` MCP tools that delegate
-    to receive() and send() — no override needed.
+    define their own typed `__init__`, and implement trigger_wake(), receive(),
+    and send(). The default tools() auto-generates `{name}_receive` and
+    `{name}_send` MCP tools that delegate to receive() and send().
     """
 
     name: str
     message_class: type[Message] = Message
 
-    def __init__(self, config):
-        self.config = config
-
-    # --- lifecycle ---
-
     def trigger_wake(self) -> Optional[Trigger]:
-        """Return a Trigger if the agent should wake, else None.
-
-        Called every poll tick — keep cheap. Each interface owns its own Trigger
-        subclass and constructs it here when it has something to report.
-        """
         raise NotImplementedError
 
-    # --- I/O ---
-
     async def receive(self) -> list[Message]:
-        """Consume and return any pending inbound messages.
-
-        Subclasses may return a list of a Message subclass with richer fields;
-        those extra fields will appear in the receive tool's JSON output.
-        Raise on failure — the tool wrapper turns it into an MCP error result.
-        """
         raise NotImplementedError
 
     async def send(self, message: Message) -> str:
-        """Send an outbound message. Return a short status string on success.
-        Raise on failure — the tool wrapper turns it into an MCP error result.
-        """
+        del message
         raise NotImplementedError
 
-    # --- MCP tool exposure ---
-
-    def tools(self) -> list:
+    def tools(self) -> list[SdkMcpTool[Any]]:
         """Auto-generate `{name}_receive` and `{name}_send` MCP tools."""
         iface_name = self.name
         msg_cls = self.message_class
@@ -90,7 +74,8 @@ class Interface:
             f"Consumes them — they will not be returned again.",
             {},
         )
-        async def receive_tool(args):
+        async def receive_tool(args: ToolArgs) -> ToolResult:
+            del args  # schema is {}, no inputs to read
             try:
                 messages = await receive_fn()
             except Exception as e:
@@ -106,7 +91,7 @@ class Interface:
             f"Send a message via the {iface_name} interface.",
             msg_cls.SCHEMA,
         )
-        async def send_tool(args):
+        async def send_tool(args: ToolArgs) -> ToolResult:
             try:
                 status = await send_fn(msg_cls(**args))
             except Exception as e:

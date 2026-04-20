@@ -19,7 +19,7 @@ class Ping(AgentType):
         log.info(
             "ping woke on %d trigger(s): %s",
             len(triggers),
-            [type(t).__name__ for t in triggers],
+            [t.interface.name for t in triggers],
         )
         for t in triggers:
             iface = t.interface

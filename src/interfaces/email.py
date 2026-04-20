@@ -1,11 +1,12 @@
 import email
-import email.mime.text
 import email.utils
 import imaplib
 import logging
 import os
 import smtplib
 from dataclasses import dataclass
+from email import policy
+from email.message import EmailMessage as StdEmailMessage
 from typing import ClassVar, Optional
 
 from lib.interface import Interface, Message, Trigger
@@ -19,12 +20,7 @@ class EmailMessage(Message):
 
     subject: str = ""
 
-    SCHEMA: ClassVar[dict] = {"to": str, "subject": str, "body": str}
-
-
-@dataclass
-class EmailTrigger(Trigger):
-    unread: int
+    SCHEMA: ClassVar[dict[str, type]] = {"to": str, "subject": str, "body": str}
 
 
 class Email(Interface):
@@ -37,34 +33,38 @@ class Email(Interface):
     name = "email"
     message_class = EmailMessage
 
-    def __init__(self, config):
-        super().__init__(config)
-        self.imap_host = config["imap_host"]
-        self.imap_port = config.get("imap_port", 993)
-        self.smtp_host = config["smtp_host"]
-        self.smtp_port = config.get("smtp_port", 587)
-        self.username = config["username"]
-        self.password = os.environ.get(config.get("password_env", "EMAIL_PASSWORD"), "")
-        self.allowed_senders = [s.lower() for s in config.get("allowed_senders", [])]
+    def __init__(
+        self,
+        imap_host: str,
+        smtp_host: str,
+        username: str,
+        imap_port: int = 993,
+        smtp_port: int = 587,
+        password_env: str = "EMAIL_PASSWORD",
+        allowed_senders: Optional[list[str]] = None,
+    ) -> None:
+        self.imap_host = imap_host
+        self.imap_port = imap_port
+        self.smtp_host = smtp_host
+        self.smtp_port = smtp_port
+        self.username = username
+        self.password = os.environ.get(password_env, "")
+        self.allowed_senders = [s.lower() for s in (allowed_senders or [])]
 
     # --- lifecycle ---
 
-    def trigger_wake(self) -> Optional[EmailTrigger]:
+    def trigger_wake(self) -> Optional[Trigger]:
         try:
-            imap = self._imap()
-            try:
+            with self._imap() as imap:
                 count = self._count_actionable_unread(imap)
-            finally:
-                imap.close()
-                imap.logout()
         except Exception:
             log.exception("trigger_wake: imap search failed")
             return None
         if count == 0:
             return None
-        return EmailTrigger(interface=self, unread=count)
+        return Trigger(interface=self)
 
-    def _count_actionable_unread(self, imap) -> int:
+    def _count_actionable_unread(self, imap: imaplib.IMAP4_SSL) -> int:
         """Count unread messages we'd actually act on.
 
         Without `allowed_senders`, every unread email is a wake. With it set,
@@ -73,34 +73,23 @@ class Email(Interface):
         the agent is Claude).
         """
         if not self.allowed_senders:
-            status, data = imap.search(None, "UNSEEN")
-            if status != "OK":
-                return 0
-            return len(data[0].split())
+            return len(self._search_ids(imap, "UNSEEN"))
 
         ids: set[bytes] = set()
         for sender in self.allowed_senders:
-            status, data = imap.search(None, "UNSEEN", "FROM", f'"{sender}"')
-            if status != "OK":
-                continue
-            ids.update(data[0].split())
+            ids.update(self._search_ids(imap, "UNSEEN", "FROM", f'"{sender}"'))
         return len(ids)
 
     # --- I/O ---
 
-    async def receive(self) -> list[EmailMessage]:
-        out: list[EmailMessage] = []
-        imap = self._imap()
-        try:
-            status, data = imap.search(None, "UNSEEN")
-            if status != "OK":
-                raise RuntimeError(f"IMAP SEARCH failed: {status}")
-            for msg_id in data[0].split():
-                status, msg_data = imap.fetch(msg_id, "(RFC822)")
-                if status != "OK":
+    async def receive(self) -> list[Message]:
+        out: list[Message] = []
+        with self._imap() as imap:
+            for msg_id in self._search_ids(imap, "UNSEEN"):
+                parsed = self._fetch(imap, msg_id)
+                if parsed is None:
                     continue
-                parsed = email.message_from_bytes(msg_data[0][1])
-                sender = email.utils.parseaddr(parsed["From"])[1].lower()
+                sender = email.utils.parseaddr(parsed.get("From", ""))[1].lower()
                 if self.allowed_senders and sender not in self.allowed_senders:
                     log.info("ignoring email from non-allowed sender: %s", sender)
                     continue
@@ -112,9 +101,6 @@ class Email(Interface):
                         subject=parsed.get("Subject", "") or "",
                     )
                 )
-        finally:
-            imap.close()
-            imap.logout()
         return out
 
     async def send(self, message: Message) -> str:
@@ -123,10 +109,12 @@ class Email(Interface):
 
         subject = getattr(message, "subject", "") or "(no subject)"
 
-        mime = email.mime.text.MIMEText(message.body)
+        mime = StdEmailMessage()
         mime["Subject"] = subject
         mime["From"] = self.username
         mime["To"] = message.to
+        mime.set_content(message.body)
+
         with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
             server.starttls()
             server.login(self.username, self.password)
@@ -142,15 +130,31 @@ class Email(Interface):
         imap.select("INBOX")
         return imap
 
-    def _extract_body(self, parsed) -> str:
-        if parsed.is_multipart():
-            for part in parsed.walk():
-                if part.get_content_type() == "text/plain":
-                    payload = part.get_payload(decode=True)
-                    if payload:
-                        return payload.decode("utf-8", errors="replace")
+    @staticmethod
+    def _search_ids(imap: imaplib.IMAP4_SSL, *criteria: str) -> list[bytes]:
+        status, data = imap.search(None, *criteria)
+        if status != "OK" or not data or data[0] is None:
+            return []
+        return data[0].split()
+
+    @staticmethod
+    def _fetch(imap: imaplib.IMAP4_SSL, msg_id: bytes) -> Optional[StdEmailMessage]:
+        status, msg_data = imap.fetch(msg_id.decode(), "(RFC822)")
+        if status != "OK" or not msg_data:
+            return None
+        first = msg_data[0]
+        if not isinstance(first, tuple) or len(first) < 2:
+            return None
+        raw = first[1]
+        if not isinstance(raw, (bytes, bytearray)):
+            return None
+        # policy.default gives us a modern EmailMessage with get_body() etc.
+        return email.message_from_bytes(bytes(raw), policy=policy.default)
+
+    @staticmethod
+    def _extract_body(parsed: StdEmailMessage) -> str:
+        part = parsed.get_body(preferencelist=("plain",))
+        if part is None:
             return ""
-        payload = parsed.get_payload(decode=True)
-        if payload:
-            return payload.decode("utf-8", errors="replace")
-        return ""
+        content = part.get_content()
+        return content if isinstance(content, str) else ""

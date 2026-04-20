@@ -9,15 +9,26 @@ interface's MCP tools.
 import asyncio
 import logging
 import os
-import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from agent_types import AGENT_TYPES  # noqa: E402
-from interfaces import INTERFACES  # noqa: E402
-from lib.config import DATA_DIR, load_config  # noqa: E402
+from agent_types import AGENT_TYPES
+from interfaces import INTERFACES
+from lib.config import DATA_DIR, load_config
 
 POLL_INTERVAL = 3  # seconds
+
+
+def load_interfaces(config):
+    interfaces = []
+    for name, conf in config.get("interfaces", {}).items():
+        kwargs = dict(conf)
+        if not kwargs.pop("enabled", False):
+            continue
+        if name not in INTERFACES:
+            raise RuntimeError(
+                f"unknown interface '{name}', available: {list(INTERFACES)}"
+            )
+        interfaces.append(INTERFACES[name](**kwargs))
+    return interfaces
 
 
 async def main():
@@ -33,18 +44,11 @@ async def main():
     log = logging.getLogger("microagent")
 
     config = load_config()
+    interfaces = load_interfaces(config)
 
-    interfaces = []
-    for name, conf in config.get("interfaces", {}).items():
-        if not conf.get("enabled"):
-            continue
-        if name not in INTERFACES:
-            raise RuntimeError(
-                f"unknown interface '{name}', available: {list(INTERFACES)}"
-            )
-        interfaces.append(INTERFACES[name](conf))
-
-    agent_name = config.get("agent_type", "ping")
+    agent_name = config.get("agent_type")
+    if not agent_name:
+        raise RuntimeError("config missing 'agent_type'")
     if agent_name not in AGENT_TYPES:
         raise RuntimeError(
             f"unknown agent type '{agent_name}', available: {list(AGENT_TYPES)}"

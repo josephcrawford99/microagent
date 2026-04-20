@@ -42,9 +42,7 @@ class Claude(AgentType):
             allowed_tools=["mcp__interfaces__*"],
         )
 
-        summary = ", ".join(
-            f"{t.interface.name}({type(t).__name__})" for t in triggers
-        )
+        summary = ", ".join(t.interface.name for t in triggers)
         prompt = (
             f"You have been woken. Active triggers: {summary}.\n"
             "Your interface tools (e.g. mcp__interfaces__email_receive, "

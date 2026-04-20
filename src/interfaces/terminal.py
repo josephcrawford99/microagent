@@ -2,16 +2,10 @@ import glob
 import json
 import os
 import time
-from dataclasses import dataclass
 from typing import Optional
 
 from lib.config import DATA_DIR
 from lib.interface import Interface, Message, Trigger
-
-
-@dataclass
-class TerminalTrigger(Trigger):
-    pending: int
 
 
 class Terminal(Interface):
@@ -24,30 +18,28 @@ class Terminal(Interface):
 
     name = "terminal"
 
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self) -> None:
         self.inbox = os.path.join(DATA_DIR, "interfaces", "terminal", "inbox")
         self.outbox = os.path.join(DATA_DIR, "interfaces", "terminal", "outbox")
         os.makedirs(self.inbox, exist_ok=True)
         os.makedirs(self.outbox, exist_ok=True)
 
-    def trigger_wake(self) -> Optional[TerminalTrigger]:
-        pending = sum(1 for f in os.listdir(self.inbox) if f.endswith(".json"))
-        if pending == 0:
+    def trigger_wake(self) -> Optional[Trigger]:
+        if not any(f.endswith(".json") for f in os.listdir(self.inbox)):
             return None
-        return TerminalTrigger(interface=self, pending=pending)
+        return Trigger(interface=self)
 
     async def receive(self) -> list[Message]:
-        out = []
+        out: list[Message] = []
         for path in sorted(glob.glob(os.path.join(self.inbox, "*.json"))):
             with open(path) as f:
                 data = json.load(f)
             os.remove(path)
             out.append(
                 Message(
-                    body=data.get("body", ""),
-                    sender=data.get("from", "user"),
-                    to=data.get("to", "agent"),
+                    body=str(data.get("body", "")),
+                    sender=str(data.get("from", "user")),
+                    to=str(data.get("to", "agent")),
                 )
             )
         return out
