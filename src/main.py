@@ -9,25 +9,24 @@ interface's MCP tools.
 import asyncio
 import logging
 import os
+from typing import Any
 
 from dotenv import load_dotenv
 
-# Load .env before anything reads os.environ — so a restart after an `!env`
-# meta-command picks up the new values without needing `docker compose up`.
-# override=True because docker-compose's `- FOO=${FOO:-}` passthrough injects
-# empty strings for unset host vars, which load_dotenv would otherwise treat
-# as "already set" and skip.
-load_dotenv(os.path.join(os.environ.get("REPO_DIR", "/repo"), ".env"), override=True)
+# Python owns .env — docker-compose doesn't pass secrets through, so a
+# restart after `!env` picks up new values directly from the file.
+load_dotenv("/repo/.env")
 
 from agent_types import AGENT_TYPES
 from interfaces import INTERFACES
 from lib.config import DATA_DIR, load_config
+from lib.interface import Interface
 
 POLL_INTERVAL = 3  # seconds
 
 
-def load_interfaces(config):
-    interfaces = []
+def load_interfaces(config: dict[str, Any]) -> list[Interface]:
+    interfaces: list[Interface] = []
     for name, conf in config.get("interfaces", {}).items():
         kwargs = dict(conf)
         if not kwargs.pop("enabled", False):

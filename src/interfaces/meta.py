@@ -22,7 +22,7 @@ class Meta(Interface):
 
         !update  <token>                    -> git reset --hard origin/<branch>, restart
         !restart <token>                    -> restart
-        !env     <token> KEY=VAL [KEY=VAL]  -> upsert into $REPO_DIR/.env, restart
+        !env     <token> KEY=VAL [KEY=VAL]  -> upsert into /repo/.env, restart
 
     Never wakes the agent: trigger_wake() always returns None, tools() returns
     [], so the agent has zero visibility into this channel.
@@ -41,7 +41,6 @@ class Meta(Interface):
 
         self.token = os.environ.get(token_env, "")
         self.branch = branch
-        self.repo_dir = os.environ.get("REPO_DIR", "/repo")
         self.children: list[Interface] = []
         for child_name, cfg in sources.items():
             if child_name not in INTERFACES:
@@ -179,17 +178,17 @@ class Meta(Interface):
     def _handle_update(self, child: Interface, msg: Message, rest: str) -> None:
         del rest
         subprocess.run(
-            ["git", "-C", self.repo_dir, "fetch", "origin", self.branch],
+            ["git", "-C", "/repo", "fetch", "origin", self.branch],
             check=True,
             capture_output=True,
         )
         subprocess.run(
-            ["git", "-C", self.repo_dir, "reset", "--hard", f"origin/{self.branch}"],
+            ["git", "-C", "/repo", "reset", "--hard", f"origin/{self.branch}"],
             check=True,
             capture_output=True,
         )
         sha = subprocess.run(
-            ["git", "-C", self.repo_dir, "rev-parse", "--short", "HEAD"],
+            ["git", "-C", "/repo", "rev-parse", "--short", "HEAD"],
             check=True,
             capture_output=True,
             text=True,
@@ -218,7 +217,7 @@ class Meta(Interface):
         self._exit_soon()
 
     def _upsert_env(self, updates: dict[str, str]) -> None:
-        env_path = os.path.join(self.repo_dir, ".env")
+        env_path = "/repo/.env"
         try:
             with open(env_path) as f:
                 lines = f.readlines()

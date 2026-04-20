@@ -1,20 +1,21 @@
 import json
 import os
 import glob as globmod
+from typing import Any
 
 
-SOUL_DIR = os.environ.get("SOUL_DIR", "/soul")
-DATA_DIR = os.environ.get("DATA_DIR", "/data")
+SOUL_DIR = "/repo/soul"
+DATA_DIR = "/data"
 
 
-def load_config():
+def load_config() -> dict[str, Any]:
     path = os.path.join(SOUL_DIR, "config.json")
     with open(path) as f:
         return json.load(f)
 
 
-def load_soul_prompt():
-    parts = []
+def load_soul_prompt() -> str:
+    parts: list[str] = []
 
     soul_path = os.path.join(SOUL_DIR, "soul.md")
     if os.path.exists(soul_path):

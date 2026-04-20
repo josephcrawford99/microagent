@@ -2,7 +2,7 @@ import json
 import logging
 import os
 from datetime import date, datetime, time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -52,9 +52,10 @@ class Claude(AgentType):
 
     async def on_wake(self, triggers: "list[Trigger]") -> None:
         soul_prompt = load_soul_prompt()
-        my_cfg = (load_config().get("agents") or {}).get(self.name) or {}
+        agents_cfg: dict[str, Any] = load_config().get("agents") or {}
+        my_cfg: dict[str, Any] = agents_cfg.get(self.name) or {}
         rotation_time = _parse_rotation_time(
-            my_cfg.get("rotation_time", DEFAULT_ROTATION_TIME)
+            str(my_cfg.get("rotation_time", DEFAULT_ROTATION_TIME))
         )
 
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -145,13 +146,15 @@ class Claude(AgentType):
     def _load_state(self) -> dict[str, Any]:
         try:
             with open(STATE_FILE) as f:
-                data = json.load(f)
-                return data if isinstance(data, dict) else {}
+                data: Any = json.load(f)
         except FileNotFoundError:
             return {}
         except (OSError, json.JSONDecodeError):
             log.exception("failed to read %s; treating as empty", STATE_FILE)
             return {}
+        if not isinstance(data, dict):
+            return {}
+        return cast(dict[str, Any], data)
 
     def _save_state(self, state: dict[str, Any]) -> None:
         try:

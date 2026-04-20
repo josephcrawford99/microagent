@@ -1,6 +1,6 @@
 # microagent
 
-A small always-on personal assistant. Runs in a single Docker container, polls a set of pluggable **interfaces** (terminal, email, …), and wakes a pluggable **agent type** (currently Claude or a no-LLM ping smoke test) when any of them have something to deal with. The agent acts on the world by calling each interface's `receive` / `send` as MCP tools.
+A small always-on personal assistant. Runs in a single Docker container, polls a set of pluggable **interfaces** (socket, email, …), and wakes a pluggable **agent type** (currently Claude or a no-LLM ping smoke test) when any of them have something to deal with. The agent acts on the world by calling each interface's `receive` / `send` as MCP tools.
 
 ## Quick start
 
@@ -16,13 +16,9 @@ echo "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-..." > .env
 docker compose up -d --build
 docker compose logs -f microagent
 
-# 4. Talk to it from the host (uses the file-based terminal interface)
-python3 talk.py
-> ping
-< pong
+# 4. Talk to it via the socket interface
+echo "ping" | nc 127.0.0.1 8765
 ```
-
-The terminal interface lives under `data/interfaces/terminal/{inbox,outbox}` — `talk.py` writes to the inbox, the agent writes replies to the outbox.
 
 ## Layout
 
@@ -32,8 +28,6 @@ soul/                  bind mount, read-only
   soul.md              system prompt for the LLM agent
   context/*.md         extra context appended to the system prompt
 data/                  docker volume, read-write
-  interfaces/
-    terminal/{inbox,outbox}/   talk.py messages
   agent.log            daemon log mirror
 src/
   main.py              async daemon: poll interfaces, wake agent
@@ -45,9 +39,9 @@ src/
     ping.py            no-LLM smoke test
     claude.py          claude-agent-sdk query() with in-process MCP server
   interfaces/
-    terminal.py        file-based, paired with talk.py
+    socket.py          tcp line-in/line-out
     email.py           direct IMAP/SMTP, no filesystem inbox
-talk.py                host-side terminal client
+    meta.py            control-plane: !update / !restart / !env
 ```
 
 ## Configuration
@@ -59,7 +53,7 @@ talk.py                host-side terminal client
   "user": { "name": "Joey" },
   "agent_type": "claude",
   "interfaces": {
-    "terminal": { "enabled": true },
+    "socket": { "enabled": true, "host": "0.0.0.0", "port": 8765 },
     "email": {
       "enabled": true,
       "imap_host": "imap.gmail.com",
@@ -94,7 +88,7 @@ Auth: the SDK reads `CLAUDE_CODE_OAUTH_TOKEN` from the environment. Get one with
 
 ## Built-in interfaces
 
-- **`terminal`** — file-based, paired with `talk.py` on the host. Inbox/outbox under `data/interfaces/terminal/`.
+- **`socket`** — tcp line-in/line-out. `nc host 8765`, type a line, read the reply.
 - **`email`** — direct IMAP (search UNSEEN) and SMTP. `trigger_wake` filters by `allowed_senders` server-side so newsletters and notifications don't fire wakes.
 
 ## Adding an interface
