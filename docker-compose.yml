@@ -14,6 +14,10 @@ services:
       - SOUL_DIR=/soul
       - DATA_DIR=/data
       - REPO_DIR=/repo
+      # Claude CLI refuses --dangerously-skip-permissions as root; this env
+      # marks the process as sandboxed (docker container is our sandbox) so
+      # permission_mode="bypassPermissions" works.
+      - IS_SANDBOX=1
       # OAuth token for the Claude SDK. Get one with:
       #   docker compose run --rm -it microagent claude setup-token
       # Copy the value from the printed `export CLAUDE_CODE_OAUTH_TOKEN=...`
