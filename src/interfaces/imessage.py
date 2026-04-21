@@ -2,55 +2,41 @@ import json
 import logging
 import os
 import sqlite3
-import uuid
-from dataclasses import dataclass
-from typing import ClassVar, Optional
+from typing import Any, Optional
+
+from claude_agent_sdk import SdkMcpTool
 
 from lib.interface import Interface, Message, Trigger
 
 log = logging.getLogger("microagent.imessage")
 
 
-@dataclass
-class IMessageMessage(Message):
-    """iMessage payload — no subject field, unlike email."""
-
-    SCHEMA: ClassVar[dict[str, type]] = {"to": str, "body": str}
-
-
 class IMessage(Interface):
-    """iMessage via host's chat.db (read) + file-drop outbox (send).
+    """iMessage receive-only feed via host's chat.db (read-only bind-mount).
 
-    Receive: bind-mounted `chat.db` (read-only) is polled for new rows by ROWID.
-    Send: drops a JSON file into `outbox_dir`; a host-side launchd script picks
-    it up and dispatches via `osascript` → Messages.app. We can't send from
-    inside the container because iMessage's auth stack is macOS-only.
+    No send path — sending is delegated to other channels. The agent uses this
+    interface purely to observe messages you receive during the day.
 
-    `allowed_senders` mirrors email.py's cost-guard — every wake is a paid
-    agent run, so unknown senders are filtered at trigger time, not after.
+    `allowed_senders` is optional: empty list = ingest every inbound message;
+    non-empty list filters to those handles at trigger time so unknown senders
+    don't cost a wake.
     """
 
     name = "imessage"
-    message_class = IMessageMessage
 
     def __init__(
         self,
         db_path: str = "/data/chat.db",
-        outbox_dir: str = "/data/imessage-outbox",
         state_path: str = "/data/imessage_state.json",
         allowed_senders: Optional[list[str]] = None,
     ) -> None:
         self.db_path = db_path
-        self.outbox_dir = outbox_dir
         self.state_path = state_path
         self.allowed_senders = [s.lower() for s in (allowed_senders or [])]
-        os.makedirs(self.outbox_dir, exist_ok=True)
         # Seed last_seen to current max ROWID so we don't flood on first boot
         # with years of backlog. If state file exists, keep it.
         if not os.path.exists(self.state_path):
             self._save_last_seen(self._current_max_rowid())
-
-    # --- lifecycle ---
 
     def trigger_wake(self) -> Optional[Trigger]:
         try:
@@ -71,30 +57,20 @@ class IMessage(Interface):
             max_rowid = max(max_rowid, rowid)
             sender_lc = (sender or "").lower()
             if self.allowed_senders and sender_lc not in self.allowed_senders:
-                log.info("ignoring imessage from non-allowed sender: %s", sender)
                 continue
-            out.append(IMessageMessage(body=text, sender=sender_lc, to="me"))
+            out.append(Message(body=text, sender=sender_lc, to="me"))
         if max_rowid > last_seen:
             self._save_last_seen(max_rowid)
         return out
 
-    async def send(self, message: Message) -> str:
-        if not message.to:
-            raise RuntimeError("imessage send requires `to` to be set")
-        payload = {"to": message.to, "body": message.body}
-        name = f"{uuid.uuid4().hex}.json"
-        final = os.path.join(self.outbox_dir, name)
-        tmp = final + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(payload, f)
-        os.rename(tmp, final)
-        log.info("queued imessage to %s (%s)", message.to, name)
-        return f"queued to {message.to}"
+    def tools(self) -> list[SdkMcpTool[Any]]:
+        # Only expose the receive tool — no outbound path for this interface.
+        receive_tool, _ = super().tools()
+        return [receive_tool]
 
     # --- helpers ---
 
     def _connect(self) -> sqlite3.Connection:
-        # Read-only URI so we never risk mutating the host's chat.db.
         return sqlite3.connect(
             f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0
         )

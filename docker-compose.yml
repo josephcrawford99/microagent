@@ -10,10 +10,9 @@ services:
     volumes:
       - .:/repo
       - agent-data:/data
-      # iMessage channel: chat.db is read-only; outbox is how the agent hands
-      # outbound messages to the host-side sender (scripts/imessage-sender.sh).
+      # iMessage is receive-only: chat.db is bind-mounted read-only for the
+      # passive inbound feed. No outbox — sending goes through Telegram.
       - ${HOME}/Library/Messages/chat.db:/data/chat.db:ro
-      - ./imessage-outbox:/data/imessage-outbox
     environment:
       # Claude CLI refuses --dangerously-skip-permissions as root; this env
       # marks the process as sandboxed (docker container is our sandbox) so

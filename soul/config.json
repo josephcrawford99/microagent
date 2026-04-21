@@ -29,9 +29,14 @@
     "imessage": {
       "enabled": true,
       "db_path": "/data/chat.db",
-      "outbox_dir": "/data/imessage-outbox",
       "state_path": "/data/imessage_state.json",
       "allowed_senders": []
+    },
+    "telegram": {
+      "enabled": true,
+      "token_env": "TELEGRAM_BOT_TOKEN",
+      "state_path": "/data/telegram_state.json",
+      "allowed_chat_ids": []
     },
     "meta": {
       "enabled": true,
