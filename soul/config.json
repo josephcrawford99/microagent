@@ -26,6 +26,13 @@
         "josephcrawford99@gmail.com"
       ]
     },
+    "imessage": {
+      "enabled": true,
+      "db_path": "/data/chat.db",
+      "outbox_dir": "/data/imessage-outbox",
+      "state_path": "/data/imessage_state.json",
+      "allowed_senders": []
+    },
     "meta": {
       "enabled": true,
       "token_env": "META_TOKEN",
@@ -33,6 +40,13 @@
       "sources": {
         "socket": { "host": "0.0.0.0", "port": 8766 }
       }
+    },
+    "dashboard": {
+      "enabled": true,
+      "host": "0.0.0.0",
+      "port": 8767,
+      "token_env": "DASHBOARD_TOKEN",
+      "public_url": ""
     }
   }
 }

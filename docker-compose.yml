@@ -6,14 +6,32 @@ services:
     ports:
       - "8765:8765"
       - "8766:8766"
+      - "8767:8767"
     volumes:
       - .:/repo
       - agent-data:/data
+      # iMessage channel: chat.db is read-only; outbox is how the agent hands
+      # outbound messages to the host-side sender (scripts/imessage-sender.sh).
+      - ${HOME}/Library/Messages/chat.db:/data/chat.db:ro
+      - ./imessage-outbox:/data/imessage-outbox
     environment:
       # Claude CLI refuses --dangerously-skip-permissions as root; this env
       # marks the process as sandboxed (docker container is our sandbox) so
       # permission_mode="bypassPermissions" works.
       - IS_SANDBOX=1
+
+  # Optional: exposes the dashboard publicly via Cloudflare Tunnel.
+  # Set CLOUDFLARED_TOKEN in .env (from Cloudflare Zero Trust → Tunnels) and
+  # run `docker compose --profile public up -d` to start it.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: microagent-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TOKEN}
+    depends_on:
+      - microagent
+    profiles:
+      - public
 
 volumes:
   agent-data:

@@ -26,7 +26,6 @@ echo "ping" | nc 127.0.0.1 8765
 soul/                  bind mount, read-only
   config.json          which agent type, which interfaces, per-interface config
   soul.md              system prompt for the LLM agent
-  context/*.md         extra context appended to the system prompt
 data/                  docker volume, read-write
   agent.log            daemon log mirror
 src/
@@ -42,6 +41,7 @@ src/
     socket.py          tcp line-in/line-out
     email.py           direct IMAP/SMTP, no filesystem inbox
     meta.py            control-plane: !update / !restart / !env
+    dashboard.py       http ui for editing .env / soul/config.json
 ```
 
 ## Configuration
@@ -82,7 +82,7 @@ For Gmail: 2-Step Verification → App Passwords (https://myaccount.google.com/a
 ## Built-in agent types
 
 - **`ping`** — no LLM. Iterates triggers, replies `pong` to `ping`. Useful for isolating interface bugs from agent bugs.
-- **`claude`** — runs `claude_agent_sdk.query()` once per wake with all interfaces' tools combined into one in-process MCP server. Reads `soul/soul.md` + `soul/context/*.md` as the system prompt on every wake (so edits land without a restart). Logs every stream message so OAuth and tool-use issues are visible in `docker compose logs`.
+- **`claude`** — runs `claude_agent_sdk.query()` once per wake with all interfaces' tools combined into one in-process MCP server. Reads `soul/soul.md` as the system prompt on every wake (so edits land without a restart). Logs every stream message so OAuth and tool-use issues are visible in `docker compose logs`.
 
 Auth: the SDK reads `CLAUDE_CODE_OAUTH_TOKEN` from the environment. Get one with `claude setup-token` (which uses your Claude Max / Pro subscription — no API billing).
 
@@ -90,6 +90,39 @@ Auth: the SDK reads `CLAUDE_CODE_OAUTH_TOKEN` from the environment. Get one with
 
 - **`socket`** — tcp line-in/line-out. `nc host 8765`, type a line, read the reply.
 - **`email`** — direct IMAP (search UNSEEN) and SMTP. `trigger_wake` filters by `allowed_senders` server-side so newsletters and notifications don't fire wakes.
+- **`dashboard`** — HTTP control panel (default `:8767`) for editing `.env` and `soul/config.json` at runtime. See [Dashboard](#dashboard).
+
+## Dashboard
+
+Web UI for editing secrets and config without ssh. Runs on port `8767` inside the container and never wakes the agent.
+
+**Auth model:**
+- Direct LAN hits (e.g. `http://192.168.0.6:8767`) are trusted — no login.
+- Requests arriving via Cloudflare Tunnel (detected by the `CF-Connecting-IP` header) require `DASHBOARD_TOKEN` from `.env`.
+- `/demo` is always public and renders a mocked UI with fake values — safe to link from a portfolio.
+
+**Local use:** just hit `http://<box-ip>:8767` from a device on the same network.
+
+**Public access via Cloudflare Tunnel** (for `dashboard.yourdomain.com`):
+
+1. In Cloudflare dashboard → **Zero Trust** → **Networks** → **Tunnels** → **Create a tunnel** → pick *Cloudflared*. Name it (e.g. `microagent`).
+2. On the "Install and run connector" screen, copy the **token** (the long string after `--token` in the docker snippet).
+3. Add to `.env` on the box:
+   ```
+   CLOUDFLARED_TOKEN=eyJh...
+   DASHBOARD_TOKEN=<any-long-random-string>
+   ```
+4. In the tunnel's **Public Hostnames** tab, add:
+   - Subdomain: `dashboard` (or whatever)
+   - Domain: `yourdomain.com` (must already be on Cloudflare)
+   - Service: `HTTP` → `microagent:8767` (container name on the compose network)
+5. Start the tunnel container:
+   ```fish
+   docker compose --profile public up -d
+   ```
+6. Visit `https://dashboard.yourdomain.com` — it'll prompt for `DASHBOARD_TOKEN`. Share `https://dashboard.yourdomain.com/demo` as the read-only portfolio link.
+
+To stop exposing publicly: `docker compose stop cloudflared`. The dashboard stays up on the LAN.
 
 ## Adding an interface
 

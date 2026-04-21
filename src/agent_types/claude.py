@@ -87,20 +87,7 @@ class Claude(AgentType):
         )
 
         summary = ", ".join(t.interface.name for t in triggers)
-        prompt = (
-            f"You have been woken. Active triggers: {summary}.\n\n"
-            f"Read pending messages with the interface's *_receive tool, decide "
-            f"what to do, and reply via *_send when appropriate. Your working "
-            f"directory ({DATA_DIR}) persists across wakes — use Read/Write/Edit "
-            f"to keep notes, task lists, or whatever helps you be useful next "
-            f"time.\n\n"
-            f"When this exchange has naturally concluded and you don't expect "
-            f"an immediate follow-up, call `mcp__interfaces__session_idle` "
-            f"before stopping. That lets the daemon rotate your session at the "
-            f"next scheduled time; skip it if the conversation is still live "
-            f"(e.g. you just asked a question and are awaiting a reply). If "
-            f"there's nothing meaningful to do at all, mark idle and stop."
-        )
+        prompt = f"Woken. Active triggers: {summary}."
 
         log.info(
             "claude wake | triggers=%s tools=%d resume=%s rotated=%s",
