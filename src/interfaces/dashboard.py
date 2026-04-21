@@ -550,7 +550,7 @@ button{padding:.5rem 1rem;cursor:pointer}
 <section>
 <h2>Agent Space</h2>
 <p class="status" style="margin:.2rem 0 .6rem">A corner the agent owns. It can write any HTML / linked pages here and check its own work.</p>
-<iframe id="space-frame" src="/space/" style="width:100%;height:22rem;border:1px solid #ddd;border-radius:4px;background:#fff" sandbox="allow-same-origin allow-top-navigation-by-user-activation"></iframe>
+<iframe id="space-frame" src="/space/" style="width:100%;height:22rem;border:1px solid #ddd;border-radius:4px;background:#fff" sandbox="allow-same-origin allow-scripts allow-top-navigation-by-user-activation"></iframe>
 <div class="row" style="margin-top:.4rem">
 <a href="/space/" target="_blank" rel="noopener">open in new tab →</a>
 <button type="button" onclick="reloadSpace()">reload</button>
