@@ -231,7 +231,11 @@ MOCK_CONFIG = {
 def _make_handler(dash: "Dashboard"):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
-            log.info("%s - %s", self.address_string(), fmt % args)
+            msg = fmt % args
+            # Chat poll fires every ~1s per open tab — logging it buries everything else.
+            if "/api/chat/poll" in msg:
+                return
+            log.info("%s - %s", self.address_string(), msg)
 
         # --- helpers ---
 

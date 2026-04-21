@@ -8,6 +8,7 @@ interface's MCP tools.
 
 import asyncio
 import logging
+import logging.handlers
 import os
 from typing import Any
 
@@ -46,7 +47,11 @@ async def main():
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler(os.path.join(DATA_DIR, "agent.log")),
+            logging.handlers.RotatingFileHandler(
+                os.path.join(DATA_DIR, "agent.log"),
+                maxBytes=2 * 1024 * 1024,
+                backupCount=3,
+            ),
         ],
     )
     log = logging.getLogger("microagent")
