@@ -60,6 +60,14 @@ class Interface:
         del message
         raise NotImplementedError
 
+    async def indicate_pending(self, note: str) -> None:
+        """Optional hook — the agent wrapper calls this while it's thinking or
+        using tools so the interface can surface a transient "typing…" signal.
+        Default is no-op; interfaces whose medium can't express it (email, sms
+        outbox) simply don't override. Called repeatedly during a wake; the
+        next real send() implicitly clears the indicator."""
+        del note
+
     def tools(self) -> list[SdkMcpTool[Any]]:
         """Auto-generate `{name}_receive` and `{name}_send` MCP tools."""
         iface_name = self.name

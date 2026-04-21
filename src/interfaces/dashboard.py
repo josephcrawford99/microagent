@@ -59,6 +59,11 @@ class Dashboard(Interface):
         self._chat_lock = threading.Lock()
         self._chat_log: list[dict] = []
         self._chat_next_id = 1
+        # Transient "agent is thinking / using X" indicator. Cleared when the
+        # next real send() lands. Monotonic pending_id lets the UI detect
+        # clears even if the text happens to repeat.
+        self._pending: Optional[str] = None
+        self._pending_id = 0
         threading.Thread(target=self._serve, daemon=True).start()
 
     # --- Interface contract ---
@@ -78,8 +83,16 @@ class Dashboard(Interface):
         return out
 
     async def send(self, message: Message) -> str:
+        with self._chat_lock:
+            self._pending = None
+            self._pending_id += 1
         self._chat_append("agent", message.body or "")
         return "delivered to dashboard"
+
+    async def indicate_pending(self, note: str) -> None:
+        with self._chat_lock:
+            self._pending = note
+            self._pending_id += 1
 
     # --- chat plumbing ---
 
@@ -106,7 +119,8 @@ class Dashboard(Interface):
         with self._chat_lock:
             msgs = [m for m in self._chat_log if m["id"] > after]
             latest = self._chat_next_id - 1
-        return {"messages": msgs, "latest": latest}
+            pending = {"note": self._pending, "id": self._pending_id}
+        return {"messages": msgs, "latest": latest, "pending": pending}
 
     # --- server ---
 
@@ -446,6 +460,7 @@ button{padding:.5rem 1rem;cursor:pointer}
 <section>
 <h2>Chat</h2>
 <div id="chat-log" style="border:1px solid #ddd;border-radius:4px;padding:.75rem;height:18rem;overflow-y:auto;background:#fafafa;font-family:ui-monospace,monospace;font-size:.9rem;margin-bottom:.6rem"></div>
+<div id="chat-pending" style="font-family:ui-monospace,monospace;font-size:.85rem;color:#888;font-style:italic;min-height:1.2rem;margin:-.3rem 0 .4rem .1rem"></div>
 <div class="row">
 <input id="chat-input" type="text" placeholder="say something to the agent…" style="flex:1 1 auto;padding:.5rem;border:1px solid #ccc;border-radius:4px" {{readonly}}>
 <button type="button" onclick="sendChat()" {{readonly}}>send</button>
@@ -529,12 +544,18 @@ function renderChat(msgs){
   }
   if(stick) log.scrollTop=log.scrollHeight;
 }
+function renderPending(p){
+  const el=document.getElementById('chat-pending');
+  if(!el)return;
+  el.textContent=p && p.note ? 'agent is '+p.note+'…' : '';
+}
 async function pollChat(){
   try{
     const r=await fetch('/api/chat/poll?after='+_chatAfter);
     if(r.ok){
       const d=await r.json();
       if(d.messages.length){ renderChat(d.messages); _chatAfter=d.latest; }
+      renderPending(d.pending);
     }
   }catch(e){}
 }

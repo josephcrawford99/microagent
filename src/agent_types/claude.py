@@ -101,6 +101,7 @@ class Claude(AgentType):
         try:
             async for msg in query(prompt=prompt, options=options):
                 self._log_stream_message(msg)
+                await self._emit_pending(msg, triggers)
                 if isinstance(msg, SystemMessage):
                     sid = self._extract_session_id(msg)
                     if sid:
@@ -157,6 +158,34 @@ class Claude(AgentType):
         if isinstance(sid, str) and sid:
             return sid
         return None
+
+    async def _emit_pending(
+        self, msg: object, triggers: "list[Trigger]"
+    ) -> None:
+        """Translate SDK stream events into indicate_pending() calls on the
+        triggering interfaces. Text blocks are skipped — once the agent is
+        actually writing the reply, the indicator is noise."""
+        note: str | None = None
+        if isinstance(msg, AssistantMessage):
+            for block in msg.content:
+                if isinstance(block, ThinkingBlock):
+                    note = "thinking"
+                elif isinstance(block, ToolUseBlock):
+                    note = f"using {block.name}"
+                if note:
+                    break
+        if not note:
+            return
+        seen: set[int] = set()
+        for t in triggers:
+            iface = t.interface
+            if id(iface) in seen:
+                continue
+            seen.add(id(iface))
+            try:
+                await iface.indicate_pending(note)
+            except Exception:
+                log.exception("indicate_pending failed on %s", iface.name)
 
     def _log_stream_message(self, msg: object) -> None:
         """Log every message from the SDK stream so auth/tool issues are visible."""
