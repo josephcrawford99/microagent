@@ -16,7 +16,8 @@ log = logging.getLogger("microagent.dashboard")
 ENV_PATH = "/repo/.env"
 CONFIG_PATH = "/repo/soul/config.json"
 COOKIE_NAME = "dash_token"
-# Keys matching any of these substrings render as masked •••• in UI payloads.
+# Keys matching any of these substrings get rendered as type=password inputs
+# (hidden by default, revealable with the "show values" toggle).
 SECRET_HINTS = ("TOKEN", "PASSWORD", "SECRET", "KEY", "API")
 
 
@@ -93,10 +94,8 @@ def _get_cookie(headers, name: str) -> str:
         return ""
 
 
-def _mask(key: str, value: str) -> str:
-    if any(h in key.upper() for h in SECRET_HINTS):
-        return "••••" if value else ""
-    return value
+def _is_secret(key: str) -> bool:
+    return any(h in key.upper() for h in SECRET_HINTS)
 
 
 def _read_env() -> dict[str, str]:
@@ -224,8 +223,7 @@ def _make_handler(dash: "Dashboard"):
                 if not self._authed():
                     self._login_page()
                     return
-                env = _read_env()
-                self._render({k: _mask(k, v) for k, v in env.items()}, _read_config(), demo=False)
+                self._render(_read_env(), _read_config(), demo=False)
                 return
             if path == "/api/config":
                 if not self._authed():
@@ -248,15 +246,11 @@ def _make_handler(dash: "Dashboard"):
                 try:
                     payload = json.loads(body)
                     entries = payload.get("entries", [])
-                    existing = _read_env()
                     new: dict[str, str] = {}
                     for row in entries:
                         k, v = row.get("key", "").strip(), row.get("value", "")
                         if not k:
                             continue
-                        # Keep existing value when UI sends the mask sentinel.
-                        if v == "••••" and k in existing:
-                            v = existing[k]
                         new[k] = v
                     _write_env(new)
                     self._json(200, {"ok": True})
@@ -300,13 +294,17 @@ def _make_handler(dash: "Dashboard"):
             self._login_page(error="invalid token")
 
         def _render(self, env: dict[str, str], cfg: dict, demo: bool) -> None:
-            env_rows = "".join(
-                f'<tr><td><input name="k" value="{html.escape(k)}"></td>'
-                f'<td><input name="v" value="{html.escape(v)}"></td>'
-                f'<td><button type="button" class="del" onclick="softDelete(this)">delete</button>'
-                f'<button type="button" class="undo" onclick="undo(this)" hidden>undo</button></td></tr>'
-                for k, v in sorted(env.items())
-            )
+            def _row(k: str, v: str) -> str:
+                vtype = "password" if _is_secret(k) else "text"
+                secret_cls = " secret" if _is_secret(k) else ""
+                return (
+                    f'<tr class="env-row{secret_cls}"><td><input name="k" value="{html.escape(k)}"></td>'
+                    f'<td><input name="v" type="{vtype}" value="{html.escape(v)}"></td>'
+                    f'<td><button type="button" class="del" onclick="softDelete(this)">delete</button>'
+                    f'<button type="button" class="undo" onclick="undo(this)" hidden>undo</button></td></tr>'
+                )
+
+            env_rows = "".join(_row(k, v) for k, v in sorted(env.items()))
             page = (
                 _PAGE_HTML
                 .replace("{{banner}}", _DEMO_BANNER if demo else "")
@@ -346,15 +344,15 @@ body{font-family:system-ui;max-width:860px;margin:0 auto;padding:1rem}
 h1{margin-top:0}
 section{border:1px solid #ddd;border-radius:6px;padding:1rem;margin:1rem 0}
 table{width:100%;border-collapse:collapse}
-td{padding:.25rem}
+td{padding:.35rem .4rem}
 input[type=text],input:not([type]){width:100%;padding:.4rem;font-family:ui-monospace,monospace}
 tr.deleted input{text-decoration:line-through;opacity:.4;background:#fee}
 .del{color:#a00;background:none;border:1px solid #ddd;border-radius:4px;padding:.25rem .5rem;font-size:.85rem}
 .del:hover{background:#fee;border-color:#a00}
 .undo{background:#ffd;border:1px solid #cc9;border-radius:4px;padding:.25rem .5rem;font-size:.85rem}
 textarea{width:100%;height:24rem;font-family:ui-monospace,monospace;font-size:.85rem}
-button{padding:.5rem 1rem;cursor:pointer;margin-right:.5rem}
-.row{display:flex;gap:.5rem;align-items:center}
+button{padding:.5rem 1rem;cursor:pointer}
+.row{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
 .status{color:#666;font-size:.9rem}
 </style></head>
 <body>
@@ -369,6 +367,7 @@ button{padding:.5rem 1rem;cursor:pointer;margin-right:.5rem}
 <div class="row" style="margin-top:.5rem">
 <button type="button" onclick="addRow()" {{readonly}}>+ add</button>
 <button type="button" onclick="saveEnv()" {{readonly}}>save</button>
+<button type="button" onclick="toggleReveal()">show values</button>
 <span id="env-status" class="status"></span>
 </div>
 </section>
@@ -401,6 +400,14 @@ function softDelete(btn){
   tr.querySelectorAll('input').forEach(i=>i.disabled=true);
   tr.querySelector('.del').hidden=true;
   tr.querySelector('.undo').hidden=false;
+}
+let _revealed=false;
+function toggleReveal(){
+  _revealed=!_revealed;
+  document.querySelectorAll('#env tbody tr.secret input[name=v]').forEach(i=>{
+    i.type=_revealed?'text':'password';
+  });
+  event.target.textContent=_revealed?'hide values':'show values';
 }
 function undo(btn){
   const tr=btn.closest('tr');
