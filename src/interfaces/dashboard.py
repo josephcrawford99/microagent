@@ -298,10 +298,12 @@ def _make_handler(dash: "Dashboard"):
                 vtype = "password" if _is_secret(k) else "text"
                 secret_cls = " secret" if _is_secret(k) else ""
                 return (
-                    f'<tr class="env-row{secret_cls}"><td><input name="k" value="{html.escape(k)}"></td>'
-                    f'<td><input name="v" type="{vtype}" value="{html.escape(v)}"></td>'
-                    f'<td><button type="button" class="del" onclick="softDelete(this)">delete</button>'
-                    f'<button type="button" class="undo" onclick="undo(this)" hidden>undo</button></td></tr>'
+                    f'<div class="env-row{secret_cls}">'
+                    f'<input class="k" name="k" value="{html.escape(k)}">'
+                    f'<input class="v" name="v" type="{vtype}" value="{html.escape(v)}">'
+                    f'<button type="button" class="del" onclick="softDelete(this)">delete</button>'
+                    f'<button type="button" class="undo" onclick="undo(this)" hidden>undo</button>'
+                    f'</div>'
                 )
 
             env_rows = "".join(_row(k, v) for k, v in sorted(env.items()))
@@ -343,10 +345,12 @@ _PAGE_HTML = """<!doctype html>
 body{font-family:system-ui;max-width:860px;margin:0 auto;padding:1rem}
 h1{margin-top:0}
 section{border:1px solid #ddd;border-radius:6px;padding:1rem;margin:1rem 0}
-table{width:100%;border-collapse:collapse}
-td{padding:.35rem .4rem}
-input[type=text],input:not([type]){width:100%;padding:.4rem;font-family:ui-monospace,monospace}
-tr.deleted input{text-decoration:line-through;opacity:.4;background:#fee}
+#env{display:flex;flex-direction:column;gap:.5rem}
+.env-row{display:flex;gap:.6rem;align-items:center}
+.env-row input{padding:.45rem;font-family:ui-monospace,monospace;border:1px solid #ccc;border-radius:4px;min-width:0}
+.env-row input.k{flex:0 0 16rem}
+.env-row input.v{flex:1 1 auto}
+.env-row.deleted input{text-decoration:line-through;opacity:.4;background:#fee}
 .del{color:#a00;background:none;border:1px solid #ddd;border-radius:4px;padding:.25rem .5rem;font-size:.85rem}
 .del:hover{background:#fee;border-color:#a00}
 .undo{background:#ffd;border:1px solid #cc9;border-radius:4px;padding:.25rem .5rem;font-size:.85rem}
@@ -363,7 +367,7 @@ button{padding:.5rem 1rem;cursor:pointer}
 
 <section>
 <h2>Environment (.env)</h2>
-<table id="env"><tbody>{{env_rows}}</tbody></table>
+<div id="env">{{env_rows}}</div>
 <div class="row" style="margin-top:.5rem">
 <button type="button" onclick="addRow()" {{readonly}}>+ add</button>
 <button type="button" onclick="saveEnv()" {{readonly}}>save</button>
@@ -389,37 +393,38 @@ button{padding:.5rem 1rem;cursor:pointer}
 
 <script>
 function addRow(){
-  const tr=document.createElement('tr');
-  tr.innerHTML='<td><input name="k" value=""></td><td><input name="v" value=""></td>'+
-               '<td><button type="button" class="del" onclick="this.closest(\\'tr\\').remove()">×</button></td>';
-  document.querySelector('#env tbody').appendChild(tr);
+  const row=document.createElement('div');
+  row.className='env-row';
+  row.innerHTML='<input class="k" name="k" value=""><input class="v" name="v" value="">'+
+               '<button type="button" class="del" onclick="this.closest(\\'.env-row\\').remove()">×</button>';
+  document.getElementById('env').appendChild(row);
 }
 function softDelete(btn){
-  const tr=btn.closest('tr');
-  tr.classList.add('deleted');
-  tr.querySelectorAll('input').forEach(i=>i.disabled=true);
-  tr.querySelector('.del').hidden=true;
-  tr.querySelector('.undo').hidden=false;
+  const row=btn.closest('.env-row');
+  row.classList.add('deleted');
+  row.querySelectorAll('input').forEach(i=>i.disabled=true);
+  row.querySelector('.del').hidden=true;
+  row.querySelector('.undo').hidden=false;
 }
 let _revealed=false;
 function toggleReveal(){
   _revealed=!_revealed;
-  document.querySelectorAll('#env tbody tr.secret input[name=v]').forEach(i=>{
+  document.querySelectorAll('#env .env-row.secret input.v').forEach(i=>{
     i.type=_revealed?'text':'password';
   });
   event.target.textContent=_revealed?'hide values':'show values';
 }
 function undo(btn){
-  const tr=btn.closest('tr');
-  tr.classList.remove('deleted');
-  tr.querySelectorAll('input').forEach(i=>i.disabled=false);
-  tr.querySelector('.del').hidden=false;
-  tr.querySelector('.undo').hidden=true;
+  const row=btn.closest('.env-row');
+  row.classList.remove('deleted');
+  row.querySelectorAll('input').forEach(i=>i.disabled=false);
+  row.querySelector('.del').hidden=false;
+  row.querySelector('.undo').hidden=true;
 }
 async function saveEnv(){
-  const rows=[...document.querySelectorAll('#env tbody tr:not(.deleted)')];
-  const entries=rows.map(r=>{const i=r.querySelectorAll('input');return{key:i[0].value,value:i[1].value}});
-  const removed=document.querySelectorAll('#env tbody tr.deleted').length;
+  const rows=[...document.querySelectorAll('#env .env-row:not(.deleted)')];
+  const entries=rows.map(r=>({key:r.querySelector('.k').value,value:r.querySelector('.v').value}));
+  const removed=document.querySelectorAll('#env .env-row.deleted').length;
   if(removed>0 && !confirm(`Delete ${removed} entr${removed===1?'y':'ies'}? This removes them from .env.`))return;
   const s=document.getElementById('env-status'); s.textContent='saving…';
   const r=await fetch('/api/env',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entries})});
