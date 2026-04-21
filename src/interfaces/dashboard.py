@@ -3,13 +3,15 @@ import html
 import http.cookies
 import json
 import logging
+import mimetypes
 import os
+import posixpath
 import queue
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from lib.interface import Interface, Message, Trigger
 
@@ -17,6 +19,7 @@ log = logging.getLogger("microagent.dashboard")
 
 ENV_PATH = "/repo/.env"
 CONFIG_PATH = "/repo/soul/config.json"
+SPACE_DIR = "/data/space"
 COOKIE_NAME = "dash_token"
 # Keys matching any of these substrings get rendered as type=password inputs
 # (hidden by default, revealable with the "show values" toggle).
@@ -205,6 +208,43 @@ def _write_config(cfg: dict) -> None:
     os.replace(tmp, CONFIG_PATH)
 
 
+def _resolve_space(url_path: str) -> Optional[str]:
+    """Resolve a /space/... URL to an absolute path under SPACE_DIR, or None if unsafe/missing.
+
+    Rejects traversal, symlinks escaping the root, and non-files. A directory
+    resolves to its index.html.
+    """
+    rel = unquote(url_path[len("/space"):]).lstrip("/")
+    # Normalize, then guard against absolute paths and parent segments.
+    rel = posixpath.normpath(rel) if rel else ""
+    if rel.startswith("..") or rel.startswith("/") or rel == ".":
+        rel = "" if rel in (".", "") else None
+        if rel is None:
+            return None
+    candidate = os.path.join(SPACE_DIR, rel) if rel else SPACE_DIR
+    try:
+        real = os.path.realpath(candidate)
+    except OSError:
+        return None
+    root = os.path.realpath(SPACE_DIR)
+    if real != root and not real.startswith(root + os.sep):
+        return None
+    if os.path.isdir(real):
+        real = os.path.join(real, "index.html")
+    if not os.path.isfile(real):
+        return None
+    return real
+
+
+_SPACE_EMPTY_HTML = b"""<!doctype html><meta charset="utf-8">
+<title>agent space</title>
+<style>body{font-family:system-ui;max-width:36rem;margin:4rem auto;padding:1rem;color:#555}</style>
+<h2>empty</h2>
+<p>The agent hasn't written anything here yet. Ask it to - this is its space to fill.</p>
+<p style="color:#888;font-size:.9rem">Path: <code>/data/space/index.html</code></p>
+"""
+
+
 def _exit_soon() -> None:
     def _bye() -> None:
         os._exit(0)
@@ -288,6 +328,34 @@ def _make_handler(dash: "Dashboard"):
                     self._json(401, {"error": "unauthorized"})
                     return
                 self._json(200, _read_config())
+                return
+            if path == "/space" or path.startswith("/space/"):
+                if not self._authed():
+                    self._login_page()
+                    return
+                # Bare /space -> canonical /space/ so relative links resolve.
+                if path == "/space":
+                    self._send(302, b"", extra=[("Location", "/space/")])
+                    return
+                # Root with no index yet: show placeholder instead of 404.
+                if path == "/space/" and not os.path.isfile(os.path.join(SPACE_DIR, "index.html")):
+                    self._send(200, _SPACE_EMPTY_HTML)
+                    return
+                resolved = _resolve_space(path)
+                if not resolved:
+                    self._send(404, b"not found", "text/plain")
+                    return
+                ctype, _ = mimetypes.guess_type(resolved)
+                ctype = ctype or "application/octet-stream"
+                if ctype.startswith("text/") or ctype in ("application/json", "application/javascript"):
+                    ctype += "; charset=utf-8"
+                try:
+                    with open(resolved, "rb") as f:
+                        body = f.read()
+                except OSError:
+                    self._send(404, b"not found", "text/plain")
+                    return
+                self._send(200, body, ctype)
                 return
             if path == "/api/chat/poll":
                 if not self._authed():
@@ -472,6 +540,16 @@ button{padding:.5rem 1rem;cursor:pointer}
 </section>
 
 <section>
+<h2>Agent Space</h2>
+<p class="status" style="margin:.2rem 0 .6rem">A corner the agent owns. It can write any HTML / linked pages here and check its own work.</p>
+<iframe id="space-frame" src="/space/" style="width:100%;height:22rem;border:1px solid #ddd;border-radius:4px;background:#fff" sandbox="allow-same-origin allow-top-navigation-by-user-activation"></iframe>
+<div class="row" style="margin-top:.4rem">
+<a href="/space/" target="_blank" rel="noopener">open in new tab →</a>
+<button type="button" onclick="reloadSpace()">reload</button>
+</div>
+</section>
+
+<section>
 <h2>Process</h2>
 <button type="button" onclick="restart()" {{readonly}}>restart agent</button>
 <span class="status">docker restarts the container automatically</span>
@@ -523,6 +601,10 @@ async function saveConfig(){
     const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
     s.textContent=r.ok?'saved':'error: '+await r.text();
   }catch(e){ s.textContent='invalid JSON: '+e.message; }
+}
+function reloadSpace(){
+  const f=document.getElementById('space-frame');
+  if(f) f.src=f.src;
 }
 async function restart(){
   if(!confirm('restart now?'))return;
