@@ -4,7 +4,9 @@ import http.cookies
 import json
 import logging
 import os
+import queue
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
@@ -29,7 +31,8 @@ class Dashboard(Interface):
     (no CF headers) are trusted — bind the port to the local network only. `/demo`
     is always public and renders mock data for portfolio viewers.
 
-    Never wakes the agent.
+    Also a full chat interface: user messages typed in the UI land in an inbox
+    that wakes the agent; agent replies via dashboard_send and surface in the UI.
     """
 
     name = "dashboard"
@@ -50,23 +53,60 @@ class Dashboard(Interface):
                 "dashboard has no token set (%s); public edits will be rejected",
                 token_env,
             )
-        t = threading.Thread(target=self._serve, daemon=True)
-        t.start()
+        # Agent-facing inbox (drained by receive()).
+        self._inbox: "queue.Queue[Message]" = queue.Queue()
+        # UI-facing chat log (user + agent messages, browser polls for updates).
+        self._chat_lock = threading.Lock()
+        self._chat_log: list[dict] = []
+        self._chat_next_id = 1
+        threading.Thread(target=self._serve, daemon=True).start()
 
     # --- Interface contract ---
 
     def trigger_wake(self) -> Optional[Trigger]:
-        return None
+        if self._inbox.empty():
+            return None
+        return Trigger(interface=self)
 
     async def receive(self) -> list[Message]:
-        return []
+        out: list[Message] = []
+        while True:
+            try:
+                out.append(self._inbox.get_nowait())
+            except queue.Empty:
+                break
+        return out
 
     async def send(self, message: Message) -> str:
-        del message
-        return "dashboard does not send"
+        self._chat_append("agent", message.body or "")
+        return "delivered to dashboard"
 
-    def tools(self) -> list:
-        return []
+    # --- chat plumbing ---
+
+    def _chat_append(self, role: str, body: str) -> None:
+        with self._chat_lock:
+            self._chat_log.append({
+                "id": self._chat_next_id,
+                "ts": time.time(),
+                "role": role,
+                "body": body,
+            })
+            self._chat_next_id += 1
+            if len(self._chat_log) > 500:
+                self._chat_log = self._chat_log[-500:]
+
+    def chat_send(self, text: str) -> None:
+        text = text.strip()
+        if not text:
+            return
+        self._chat_append("user", text)
+        self._inbox.put(Message(body=text, sender="dashboard", to="agent"))
+
+    def chat_poll(self, after: int) -> dict:
+        with self._chat_lock:
+            msgs = [m for m in self._chat_log if m["id"] > after]
+            latest = self._chat_next_id - 1
+        return {"messages": msgs, "latest": latest}
 
     # --- server ---
 
@@ -231,6 +271,16 @@ def _make_handler(dash: "Dashboard"):
                     return
                 self._json(200, _read_config())
                 return
+            if path == "/api/chat/poll":
+                if not self._authed():
+                    self._json(401, {"error": "unauthorized"})
+                    return
+                try:
+                    after = int(parse_qs(urlparse(self.path).query).get("after", ["0"])[0])
+                except ValueError:
+                    after = 0
+                self._json(200, dash.chat_poll(after))
+                return
             self._send(404, b"not found", "text/plain")
 
         def do_POST(self) -> None:
@@ -270,6 +320,14 @@ def _make_handler(dash: "Dashboard"):
             if path == "/api/restart":
                 self._json(200, {"ok": True})
                 _exit_soon()
+                return
+            if path == "/api/chat/send":
+                try:
+                    payload = json.loads(body)
+                    dash.chat_send(payload.get("body", ""))
+                    self._json(200, {"ok": True})
+                except Exception as e:
+                    self._json(400, {"error": str(e)})
                 return
             self._send(404, b"not found", "text/plain")
 
@@ -386,6 +444,15 @@ button{padding:.5rem 1rem;cursor:pointer}
 </section>
 
 <section>
+<h2>Chat</h2>
+<div id="chat-log" style="border:1px solid #ddd;border-radius:4px;padding:.75rem;height:18rem;overflow-y:auto;background:#fafafa;font-family:ui-monospace,monospace;font-size:.9rem;margin-bottom:.6rem"></div>
+<div class="row">
+<input id="chat-input" type="text" placeholder="say something to the agent…" style="flex:1 1 auto;padding:.5rem;border:1px solid #ccc;border-radius:4px" {{readonly}}>
+<button type="button" onclick="sendChat()" {{readonly}}>send</button>
+</div>
+</section>
+
+<section>
 <h2>Process</h2>
 <button type="button" onclick="restart()" {{readonly}}>restart agent</button>
 <span class="status">docker restarts the container automatically</span>
@@ -442,6 +509,47 @@ async function restart(){
   if(!confirm('restart now?'))return;
   await fetch('/api/restart',{method:'POST'});
   alert('restarting…');
+}
+
+let _chatAfter=0;
+const _roleColors={user:'#036',agent:'#060',system:'#a60'};
+function renderChat(msgs){
+  const log=document.getElementById('chat-log');
+  if(!log)return;
+  const stick=log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  for(const m of msgs){
+    const d=document.createElement('div');
+    d.style.marginBottom='.4rem';
+    const who=document.createElement('b');
+    who.textContent=m.role+': ';
+    who.style.color=_roleColors[m.role]||'#333';
+    d.appendChild(who);
+    d.appendChild(document.createTextNode(m.body));
+    log.appendChild(d);
+  }
+  if(stick) log.scrollTop=log.scrollHeight;
+}
+async function pollChat(){
+  try{
+    const r=await fetch('/api/chat/poll?after='+_chatAfter);
+    if(r.ok){
+      const d=await r.json();
+      if(d.messages.length){ renderChat(d.messages); _chatAfter=d.latest; }
+    }
+  }catch(e){}
+}
+async function sendChat(){
+  const i=document.getElementById('chat-input');
+  const body=i.value.trim();
+  if(!body)return;
+  i.value='';
+  await fetch('/api/chat/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body})});
+  pollChat();
+}
+if(document.getElementById('chat-log')){
+  document.getElementById('chat-input').addEventListener('keydown',e=>{if(e.key==='Enter')sendChat()});
+  pollChat();
+  setInterval(pollChat, 1500);
 }
 </script>
 </body></html>
