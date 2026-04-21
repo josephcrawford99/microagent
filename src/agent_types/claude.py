@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    HookMatcher,
     McpServerConfig,
     ResultMessage,
     SdkMcpTool,
@@ -78,12 +79,14 @@ class Claude(AgentType):
         )
         mcp_servers: dict[str, McpServerConfig] = {"interfaces": server}
 
+        space_nudge = _make_space_stop_hook()
         options = ClaudeAgentOptions(
             system_prompt=soul_prompt,
             mcp_servers=mcp_servers,
             permission_mode="bypassPermissions",
             cwd=DATA_DIR,
             resume=prior_session,
+            hooks={"Stop": [HookMatcher(hooks=[space_nudge])]},
         )
 
         summary = ", ".join(t.interface.name for t in triggers)
@@ -223,6 +226,33 @@ def _parse_rotation_time(raw: str) -> time:
         log.warning("invalid rotation_time %r, falling back to %s", raw, DEFAULT_ROTATION_TIME)
         hh, mm = DEFAULT_ROTATION_TIME.split(":")
         return time(hour=int(hh), minute=int(mm))
+
+
+def _make_space_stop_hook():
+    """Stop hook: on the first stop of a wake, nudge the agent to update its
+    space if anything from this exchange is worth capturing. The SDK sets
+    `stop_hook_active=True` once a Stop hook has blocked, so subsequent stops
+    pass through and the agent can actually end.
+    """
+    fired = {"done": False}
+
+    async def _hook(input_data, tool_use_id, context):
+        del tool_use_id, context
+        if fired["done"] or input_data.get("stop_hook_active"):
+            return {}
+        fired["done"] = True
+        return {
+            "decision": "block",
+            "reason": (
+                "Before stopping: is there anything from this exchange worth "
+                "capturing in /data/space/? Notes, reminders, a shopping list "
+                "item, an update to an existing page, something the user "
+                "might like to see. If yes, update the space now. If not, "
+                "just stop — no need to respond or explain."
+            ),
+        }
+
+    return _hook
 
 
 def _make_idle_tool(idle_flag: dict[str, bool]) -> SdkMcpTool[Any]:
