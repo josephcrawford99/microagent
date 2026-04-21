@@ -303,7 +303,8 @@ def _make_handler(dash: "Dashboard"):
             env_rows = "".join(
                 f'<tr><td><input name="k" value="{html.escape(k)}"></td>'
                 f'<td><input name="v" value="{html.escape(v)}"></td>'
-                f'<td><button type="button" onclick="this.closest(\'tr\').remove()">×</button></td></tr>'
+                f'<td><button type="button" class="del" onclick="softDelete(this)">delete</button>'
+                f'<button type="button" class="undo" onclick="undo(this)" hidden>undo</button></td></tr>'
                 for k, v in sorted(env.items())
             )
             page = (
@@ -347,6 +348,10 @@ section{border:1px solid #ddd;border-radius:6px;padding:1rem;margin:1rem 0}
 table{width:100%;border-collapse:collapse}
 td{padding:.25rem}
 input[type=text],input:not([type]){width:100%;padding:.4rem;font-family:ui-monospace,monospace}
+tr.deleted input{text-decoration:line-through;opacity:.4;background:#fee}
+.del{color:#a00;background:none;border:1px solid #ddd;border-radius:4px;padding:.25rem .5rem;font-size:.85rem}
+.del:hover{background:#fee;border-color:#a00}
+.undo{background:#ffd;border:1px solid #cc9;border-radius:4px;padding:.25rem .5rem;font-size:.85rem}
 textarea{width:100%;height:24rem;font-family:ui-monospace,monospace;font-size:.85rem}
 button{padding:.5rem 1rem;cursor:pointer;margin-right:.5rem}
 .row{display:flex;gap:.5rem;align-items:center}
@@ -387,12 +392,28 @@ button{padding:.5rem 1rem;cursor:pointer;margin-right:.5rem}
 function addRow(){
   const tr=document.createElement('tr');
   tr.innerHTML='<td><input name="k" value=""></td><td><input name="v" value=""></td>'+
-               '<td><button type="button" onclick="this.closest(\\'tr\\').remove()">×</button></td>';
+               '<td><button type="button" class="del" onclick="this.closest(\\'tr\\').remove()">×</button></td>';
   document.querySelector('#env tbody').appendChild(tr);
 }
+function softDelete(btn){
+  const tr=btn.closest('tr');
+  tr.classList.add('deleted');
+  tr.querySelectorAll('input').forEach(i=>i.disabled=true);
+  tr.querySelector('.del').hidden=true;
+  tr.querySelector('.undo').hidden=false;
+}
+function undo(btn){
+  const tr=btn.closest('tr');
+  tr.classList.remove('deleted');
+  tr.querySelectorAll('input').forEach(i=>i.disabled=false);
+  tr.querySelector('.del').hidden=false;
+  tr.querySelector('.undo').hidden=true;
+}
 async function saveEnv(){
-  const rows=[...document.querySelectorAll('#env tbody tr')];
+  const rows=[...document.querySelectorAll('#env tbody tr:not(.deleted)')];
   const entries=rows.map(r=>{const i=r.querySelectorAll('input');return{key:i[0].value,value:i[1].value}});
+  const removed=document.querySelectorAll('#env tbody tr.deleted').length;
+  if(removed>0 && !confirm(`Delete ${removed} entr${removed===1?'y':'ies'}? This removes them from .env.`))return;
   const s=document.getElementById('env-status'); s.textContent='saving…';
   const r=await fetch('/api/env',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entries})});
   s.textContent=r.ok?'saved':'error: '+await r.text();
