@@ -13,11 +13,6 @@ log = logging.getLogger("microagent.telegram")
 
 API_BASE = "https://api.telegram.org"
 
-# Emoji used to acknowledge receipt of an inbound message. Telegram only
-# accepts a small set of reaction emojis for bots; 👀 is in the default set.
-ACK_REACTION = "👀"
-
-
 @dataclass
 class TelegramMessage(Message):
     """Telegram payload. `to` is a numeric chat_id stringified (e.g. "12345")
@@ -98,10 +93,6 @@ class Telegram(Interface):
             if not text:
                 continue
             chat_id = (msg.get("chat") or {}).get("id")
-            msg_id = msg.get("message_id")
-            # 👀 reaction as an explicit "seen and queued" ack beyond the ✓✓.
-            if chat_id is not None and msg_id is not None:
-                self._react(chat_id, msg_id, ACK_REACTION)
             out.append(TelegramMessage(
                 body=text,
                 to="me",
@@ -144,6 +135,24 @@ class Telegram(Interface):
             except Exception:
                 log.exception("indicate_pending failed for chat_id=%s", chat_id)
 
+    async def indicate_idle(self) -> None:
+        """Wake ended — tear down any status message still lingering. A
+        cleared status message is the honest signal that the agent is idle
+        and not silently chewing on something."""
+        if not self.token or not self._status:
+            return
+        stale = list(self._status.items())
+        self._status = {}
+        for chat_id, (msg_id, _) in stale:
+            try:
+                self._api("deleteMessage", {
+                    "chat_id": chat_id,
+                    "message_id": msg_id,
+                })
+            except Exception:
+                log.exception("indicate_idle: failed to delete status msg=%s chat=%s",
+                              msg_id, chat_id)
+
     async def send(self, message: Message) -> str:
         if not self.token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
@@ -183,17 +192,6 @@ class Telegram(Interface):
         except RuntimeError as e:
             log.warning("markdown send rejected (%s); retrying as plain", e)
             self._api("sendMessage", {"chat_id": chat_id, "text": body})
-
-    def _react(self, chat_id: int, message_id: int, emoji: str) -> None:
-        try:
-            self._api("setMessageReaction", {
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "reaction": [{"type": "emoji", "emoji": emoji}],
-            })
-        except Exception:
-            log.exception("setMessageReaction failed on chat=%s msg=%s",
-                          chat_id, message_id)
 
     def _is_allowed(self, update: dict[str, Any]) -> bool:
         msg = update.get("message") or {}

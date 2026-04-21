@@ -68,6 +68,12 @@ class Interface:
         next real send() implicitly clears the indicator."""
         del note
 
+    async def indicate_idle(self) -> None:
+        """Optional hook — called once at the end of a wake after the agent
+        finishes streaming. Interfaces that posted a transient status via
+        indicate_pending should use this to tear it down if the agent ended
+        without sending a real reply (otherwise the status would linger)."""
+
     def tools(self) -> list[SdkMcpTool[Any]]:
         """Auto-generate `{name}_receive` and `{name}_send` MCP tools."""
         iface_name = self.name

@@ -114,6 +114,8 @@ class Claude(AgentType):
                 log.exception("claude wake failed with resume=%s; clearing", prior_session)
                 self._save_state({})
             raise
+        finally:
+            await self._emit_idle(triggers)
 
         effective_session = new_session or prior_session
         new_state: dict[str, Any] = {
@@ -189,6 +191,20 @@ class Claude(AgentType):
                 await iface.indicate_pending(note)
             except Exception:
                 log.exception("indicate_pending failed on %s", iface.name)
+
+    async def _emit_idle(self, triggers: "list[Trigger]") -> None:
+        """Tell each triggering interface the wake is done so it can tear
+        down any transient status UI posted during the run."""
+        seen: set[int] = set()
+        for t in triggers:
+            iface = t.interface
+            if id(iface) in seen:
+                continue
+            seen.add(id(iface))
+            try:
+                await iface.indicate_idle()
+            except Exception:
+                log.exception("indicate_idle failed on %s", iface.name)
 
     def _log_stream_message(self, msg: object) -> None:
         """Log every message from the SDK stream so auth/tool issues are visible."""
