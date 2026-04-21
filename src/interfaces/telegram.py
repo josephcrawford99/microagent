@@ -50,6 +50,7 @@ class Telegram(Interface):
         self.allowed_chat_ids = set(allowed_chat_ids or [])
         self.poll_timeout = poll_timeout
         self._pending: list[dict[str, Any]] = []
+        self._active_chats: set[int] = set()
 
     # --- lifecycle ---
 
@@ -69,6 +70,11 @@ class Telegram(Interface):
             return None
         self._pending = allowed
         self._all_fetched = updates
+        self._active_chats = {
+            (u.get("message") or {}).get("chat", {}).get("id")
+            for u in allowed
+        }
+        self._active_chats.discard(None)
         return Trigger(interface=self)
 
     async def receive(self) -> list[Message]:
@@ -88,6 +94,18 @@ class Telegram(Interface):
             ))
         self._advance_watermark(getattr(self, "_all_fetched", updates))
         return out
+
+    async def indicate_pending(self, note: str) -> None:
+        # Telegram auto-clears the typing indicator after ~5s, or when we send
+        # a real message. Re-firing while the agent thinks keeps it live.
+        del note
+        if not self.token:
+            return
+        for chat_id in self._active_chats:
+            try:
+                self._api("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+            except Exception:
+                log.exception("sendChatAction failed for chat_id=%s", chat_id)
 
     async def send(self, message: Message) -> str:
         if not self.token:
