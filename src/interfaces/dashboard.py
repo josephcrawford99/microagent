@@ -13,12 +13,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
+from lib.config import (
+    OVERLAY_PATH,
+    compute_overlay,
+    load_base_config,
+    load_config,
+    save_overlay,
+)
 from lib.interface import Interface, Message, Trigger
 
 log = logging.getLogger("microagent.dashboard")
 
 ENV_PATH = "/repo/.env"
-CONFIG_PATH = "/repo/soul/config.json"
 SPACE_DIR = "/data/space"
 COOKIE_NAME = "dash_token"
 # Keys matching any of these substrings get rendered as type=password inputs
@@ -196,16 +202,18 @@ def _write_env(new: dict[str, str]) -> None:
 
 
 def _read_config() -> dict:
-    with open(CONFIG_PATH) as f:
-        return json.load(f)
+    # Merged view — the UI shows what's actually active at runtime.
+    return load_config()
 
 
 def _write_config(cfg: dict) -> None:
-    tmp = CONFIG_PATH + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(cfg, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, CONFIG_PATH)
+    # Diff against tracked base; only differences land in the overlay file
+    # (/data/config.local.json), which survives `!update` and isn't in git.
+    base = load_base_config()
+    overlay = compute_overlay(base, cfg)
+    # compute_overlay returns its _SAME sentinel when desired == base; in that
+    # case overlay is empty, which save_overlay handles fine as `{}`.
+    save_overlay(overlay if isinstance(overlay, dict) else {})
 
 
 def _resolve_space(url_path: str) -> Optional[str]:
@@ -521,7 +529,7 @@ button{padding:.5rem 1rem;cursor:pointer}
 </section>
 
 <section>
-<h2>Soul config (soul/config.json)</h2>
+<h2>Soul config (base + /data/config.local.json overlay)</h2>
 <textarea id="config" {{readonly}}>{{config_json}}</textarea>
 <div class="row" style="margin-top:.5rem">
 <button type="button" onclick="saveConfig()" {{readonly}}>save</button>
