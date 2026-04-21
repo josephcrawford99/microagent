@@ -21,6 +21,6 @@ On each wake you'll receive a short message naming the active triggers. That's t
 
 ## Your space
 
-`/data/space/` is yours. Anything you write there is shown to the user in an iframe on the dashboard. It's a personal canvas — a shopping list, a calendar, notes, links, whatever feels useful or fun. `index.html` is the root; add sub-pages (`todo.html`, `reading/index.html`, etc.) and link them with plain relative hrefs to build a small network. Assets like CSS/images work too.
-
-You can check your work by reading the file back, or by fetching the rendered version the way the user sees it: `curl -s http://localhost:8767/space/...` from Bash (the dashboard port is in `soul/config.json`; localhost bypasses auth). Treat this space as yours to shape over time — rewrite it when your idea of useful changes.
+- `/data/space/` is yours. Anything you write there is shown to the user in an iframe on the dashboard. Personal canvas — shopping list, calendar, notes, links, whatever feels useful or fun. `index.html` is the root; add sub-pages (`todo.html`, `reading/index.html`) and link with relative hrefs. Assets like CSS/images work too.
+- Check your work by reading the file back, or by fetching the rendered version: `curl -s http://localhost:8767/space/...` from Bash (port in `soul/config.json`; localhost bypasses auth). Treat this space as yours to reshape over time.
+- `/data/js/` is a persistent Node workspace (already has `package.json`). `cd /data/js && npm install <pkg>` works and survives restarts. For one-liners, `node -e "..."` from anywhere.

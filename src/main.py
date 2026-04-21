@@ -7,6 +7,7 @@ interface's MCP tools.
 """
 
 import asyncio
+import json
 import logging
 import logging.handlers
 import os
@@ -40,8 +41,31 @@ def load_interfaces(config: dict[str, Any]) -> list[Interface]:
     return interfaces
 
 
+def _ensure_js_workspace() -> None:
+    """Seed /data/js as a persistent Node workspace so the agent can `npm
+    install` without wrecking the image or losing deps across rebuilds.
+    Idempotent: only writes package.json if it doesn't already exist."""
+    js_dir = os.path.join(DATA_DIR, "js")
+    os.makedirs(js_dir, exist_ok=True)
+    pkg = os.path.join(js_dir, "package.json")
+    if not os.path.exists(pkg):
+        with open(pkg, "w") as f:
+            json.dump(
+                {
+                    "name": "microagent-js",
+                    "version": "0.0.0",
+                    "private": True,
+                    "description": "Agent scratch workspace. Safe to `npm install` here; survives restarts.",
+                },
+                f,
+                indent=2,
+            )
+            f.write("\n")
+
+
 async def main():
     os.makedirs(DATA_DIR, exist_ok=True)
+    _ensure_js_workspace()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
