@@ -13,6 +13,10 @@ log = logging.getLogger("microagent.telegram")
 
 API_BASE = "https://api.telegram.org"
 
+# Emoji used to acknowledge receipt of an inbound message. Telegram only
+# accepts a small set of reaction emojis for bots; 👀 is in the default set.
+ACK_REACTION = "👀"
+
 
 @dataclass
 class TelegramMessage(Message):
@@ -25,14 +29,18 @@ class TelegramMessage(Message):
 class Telegram(Interface):
     """Telegram bot interface — HTTP-only, no extra deps.
 
-    Receive uses long-poll-style `getUpdates` with timeout=0 so it returns
-    immediately when nothing is pending, fitting the main loop's 3s cadence.
-    Watermark is the highest `update_id + 1` we've consumed, persisted to
-    `state_path`.
+    Receive uses `getUpdates` with timeout=0 so it returns immediately when
+    nothing is pending, fitting the main loop's 3s cadence. Watermark is the
+    highest `update_id + 1` we've consumed, persisted to `state_path`.
 
     `allowed_chat_ids` is the cost-guard — only messages from whitelisted
     chats wake the agent. An empty list denies everything; set it via the
     dashboard overlay after you know your own chat_id.
+
+    Live status: `indicate_pending` posts a status message in the chat and
+    edits it in place as the agent moves through thinking/tool-use states.
+    The first real `send()` deletes the status message before posting the
+    actual reply, so the user never sees a stale "working…" linger.
     """
 
     name = "telegram"
@@ -51,6 +59,8 @@ class Telegram(Interface):
         self.poll_timeout = poll_timeout
         self._pending: list[dict[str, Any]] = []
         self._active_chats: set[int] = set()
+        # chat_id -> (message_id, last_note) for the live status message.
+        self._status: dict[int, tuple[int, str]] = {}
 
     # --- lifecycle ---
 
@@ -64,8 +74,6 @@ class Telegram(Interface):
             return None
         allowed = [u for u in updates if self._is_allowed(u)]
         if not allowed:
-            # Still advance the watermark past ignored updates so we don't
-            # refetch them forever.
             self._advance_watermark(updates)
             return None
         self._pending = allowed
@@ -75,6 +83,9 @@ class Telegram(Interface):
             for u in allowed
         }
         self._active_chats.discard(None)
+        # Fresh wake — any stale status message id is discarded, since a
+        # new reply cycle starts its own status message.
+        self._status = {}
         return Trigger(interface=self)
 
     async def receive(self) -> list[Message]:
@@ -87,6 +98,10 @@ class Telegram(Interface):
             if not text:
                 continue
             chat_id = (msg.get("chat") or {}).get("id")
+            msg_id = msg.get("message_id")
+            # 👀 reaction as an explicit "seen and queued" ack beyond the ✓✓.
+            if chat_id is not None and msg_id is not None:
+                self._react(chat_id, msg_id, ACK_REACTION)
             out.append(TelegramMessage(
                 body=text,
                 to="me",
@@ -96,29 +111,89 @@ class Telegram(Interface):
         return out
 
     async def indicate_pending(self, note: str) -> None:
-        # Telegram auto-clears the typing indicator after ~5s, or when we send
-        # a real message. Re-firing while the agent thinks keeps it live.
-        del note
+        """Live status. Shows the real agent activity (thinking / using X)
+        instead of a generic 'working…' placeholder, mirroring the dashboard."""
         if not self.token:
             return
+        body = f"_{_escape_md(note)}_"
         for chat_id in self._active_chats:
             try:
+                # Always fire typing so the ••• shows instantly too.
                 self._api("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+                existing = self._status.get(chat_id)
+                if existing is None:
+                    resp = self._api("sendMessage", {
+                        "chat_id": chat_id,
+                        "text": body,
+                        "parse_mode": "MarkdownV2",
+                    })
+                    msg_id = (resp.get("result") or {}).get("message_id")
+                    if msg_id:
+                        self._status[chat_id] = (int(msg_id), note)
+                else:
+                    msg_id, last_note = existing
+                    if last_note == note:
+                        continue  # no-op edit; Telegram rejects identical edits
+                    self._api("editMessageText", {
+                        "chat_id": chat_id,
+                        "message_id": msg_id,
+                        "text": body,
+                        "parse_mode": "MarkdownV2",
+                    })
+                    self._status[chat_id] = (msg_id, note)
             except Exception:
-                log.exception("sendChatAction failed for chat_id=%s", chat_id)
+                log.exception("indicate_pending failed for chat_id=%s", chat_id)
 
     async def send(self, message: Message) -> str:
         if not self.token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
         if not message.to:
             raise RuntimeError("telegram send requires `to` (chat_id or @username)")
-        self._api("sendMessage", {
-            "chat_id": message.to,
-            "text": message.body,
-        })
+        # Clear the status message for this chat before the real reply lands,
+        # so the chat doesn't end with a lingering italicized "using X".
+        try:
+            chat_id_int = int(message.to)
+        except (TypeError, ValueError):
+            chat_id_int = None
+        if chat_id_int is not None and chat_id_int in self._status:
+            msg_id, _ = self._status.pop(chat_id_int)
+            try:
+                self._api("deleteMessage", {
+                    "chat_id": message.to,
+                    "message_id": msg_id,
+                })
+            except Exception:
+                log.exception("failed to clear status message %s in chat %s",
+                              msg_id, message.to)
+        self._send_text(message.to, message.body)
         return f"sent to {message.to}"
 
     # --- helpers ---
+
+    def _send_text(self, chat_id: str, body: str) -> None:
+        """Send a text message. Tries Markdown first so agent replies with
+        **bold**, _italic_, `code`, ```fenced``` render naturally. Falls back
+        to plain text if Telegram rejects the markup (e.g. an unclosed `*`)."""
+        try:
+            self._api("sendMessage", {
+                "chat_id": chat_id,
+                "text": body,
+                "parse_mode": "Markdown",
+            })
+        except RuntimeError as e:
+            log.warning("markdown send rejected (%s); retrying as plain", e)
+            self._api("sendMessage", {"chat_id": chat_id, "text": body})
+
+    def _react(self, chat_id: int, message_id: int, emoji: str) -> None:
+        try:
+            self._api("setMessageReaction", {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "reaction": [{"type": "emoji", "emoji": emoji}],
+            })
+        except Exception:
+            log.exception("setMessageReaction failed on chat=%s msg=%s",
+                          chat_id, message_id)
 
     def _is_allowed(self, update: dict[str, Any]) -> bool:
         msg = update.get("message") or {}
@@ -166,3 +241,11 @@ class Telegram(Interface):
         with open(tmp, "w") as f:
             json.dump({"offset": int(offset)}, f)
         os.rename(tmp, self.state_path)
+
+
+# MarkdownV2 requires these chars to be backslash-escaped in literal text.
+_MDV2_SPECIAL = r"_*[]()~`>#+-=|{}.!\\"
+
+
+def _escape_md(text: str) -> str:
+    return "".join("\\" + c if c in _MDV2_SPECIAL else c for c in text)
