@@ -104,6 +104,11 @@ class Dashboard(Interface):
             self._pending = note
             self._pending_id += 1
 
+    async def indicate_idle(self) -> None:
+        with self._chat_lock:
+            self._pending = None
+            self._pending_id += 1
+
     # --- chat plumbing ---
 
     def _chat_append(self, role: str, body: str) -> None:
