@@ -58,6 +58,7 @@ class Claude(AgentType):
         rotation_time = _parse_rotation_time(
             str(my_cfg.get("rotation_time", DEFAULT_ROTATION_TIME))
         )
+        _write_cli_settings(my_cfg.get("cli_settings"))
 
         os.makedirs(DATA_DIR, exist_ok=True)
         state = self._load_state()
@@ -232,6 +233,22 @@ class Claude(AgentType):
             )
         else:
             log.info("stream %s: %r", type(msg).__name__, msg)
+
+
+def _write_cli_settings(settings: Any) -> None:
+    """If the config provides a `cli_settings` dict, materialize it at the
+    Claude Code CLI's user-level settings path. Lets the soul control things
+    like `attribution.commit` (suppress the Co-Authored-By trailer) without
+    the wiring leaking into the shared Dockerfile."""
+    if not isinstance(settings, dict):
+        return
+    path = os.path.expanduser("~/.claude/settings.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        with open(path, "w") as f:
+            json.dump(settings, f)
+    except OSError:
+        log.exception("failed to write %s", path)
 
 
 def _parse_rotation_time(raw: str) -> time:

@@ -5,7 +5,12 @@
   "agent_type": "claude",
   "agents": {
     "claude": {
-      "rotation_time": "03:00"
+      "rotation_time": "03:00",
+      "cli_settings": {
+        "attribution": {
+          "commit": ""
+        }
+      }
     }
   },
   "interfaces": {
