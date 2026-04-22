@@ -27,6 +27,7 @@ log = logging.getLogger("microagent.dashboard")
 
 ENV_PATH = "/repo/.env"
 SPACE_DIR = "/data/space"
+USAGE_PATH = "/data/usage.json"
 COOKIE_NAME = "dash_token"
 # Keys matching any of these substrings get rendered as type=password inputs
 # (hidden by default, revealable with the "show values" toggle).
@@ -212,6 +213,15 @@ def _read_config() -> dict:
     return load_config()
 
 
+def _read_usage() -> dict:
+    try:
+        with open(USAGE_PATH) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {}
+
+
 def _write_config(cfg: dict) -> None:
     # Diff against tracked base; only differences land in the overlay file
     # (/data/config.local.json), which survives `!update` and isn't in git.
@@ -386,6 +396,12 @@ def _make_handler(dash: "Dashboard"):
                     self._send(404, b"not found", "text/plain")
                     return
                 self._send(200, body, ctype)
+                return
+            if path == "/api/usage":
+                if not self._authed():
+                    self._json(401, {"error": "unauthorized"})
+                    return
+                self._json(200, _read_usage())
                 return
             if path == "/api/chat/poll":
                 if not self._authed():
@@ -593,6 +609,11 @@ button{padding:.5rem 1rem;cursor:pointer}
 </section>
 
 <section>
+<h2>Usage</h2>
+<div id="usage" class="status">loading…</div>
+</section>
+
+<section>
 <h2>Process</h2>
 <button type="button" onclick="update()" {{readonly}}>update &amp; restart</button>
 <button type="button" onclick="restart()" {{readonly}}>restart agent</button>
@@ -709,6 +730,45 @@ if(document.getElementById('chat-log')){
   pollChat();
   setInterval(pollChat, 1500);
 }
+
+function fmtNum(n){ return (n==null)?'–':n.toLocaleString(); }
+function fmtResets(ts){
+  if(!ts) return '–';
+  const d=new Date(ts*1000), now=new Date();
+  const mins=Math.round((d-now)/60000);
+  const hhmm=d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  if(mins<=0) return hhmm+' (now)';
+  if(mins<60) return hhmm+' (in '+mins+'m)';
+  return hhmm+' (in '+Math.round(mins/60)+'h'+(mins%60)+'m)';
+}
+function renderUsage(d){
+  const el=document.getElementById('usage'); if(!el) return;
+  const lw=d.last_wake, rl=d.rate_limit;
+  if(!lw && !rl){ el.textContent='no wakes recorded yet'; return; }
+  const parts=[];
+  if(lw){
+    const u=lw.usage||{};
+    parts.push('<div><b>Last wake</b> ('+(lw.at||'?')+', '+(lw.num_turns||0)+' turns, $'+((lw.total_cost_usd||0).toFixed(4))+')</div>'
+      +'<div style="font-family:ui-monospace,monospace;font-size:.85rem">'
+      +'in: '+fmtNum(u.input_tokens)+' · out: '+fmtNum(u.output_tokens)
+      +' · cache read: '+fmtNum(u.cache_read_input_tokens)
+      +' · cache write: '+fmtNum(u.cache_creation_input_tokens)
+      +'</div>');
+  }
+  if(rl){
+    parts.push('<div style="margin-top:.5rem"><b>Rate limit</b> ('+(rl.rate_limit_type||'?')+'): '+(rl.status||'?')
+      +(rl.utilization!=null?' · '+Math.round(rl.utilization*100)+'% used':'')
+      +' · resets '+fmtResets(rl.resets_at)+'</div>');
+  }
+  el.innerHTML=parts.join('');
+}
+async function pollUsage(){
+  try{
+    const r=await fetch('/api/usage');
+    if(r.ok) renderUsage(await r.json());
+  }catch(e){}
+}
+if(document.getElementById('usage')){ pollUsage(); setInterval(pollUsage, 5000); }
 </script>
 </body></html>
 """

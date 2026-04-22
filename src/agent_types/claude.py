@@ -24,6 +24,7 @@ from claude_agent_sdk import (
     query,
     tool,
 )
+from claude_agent_sdk.types import RateLimitEvent
 
 from lib.agent import AgentType
 from lib.config import DATA_DIR, load_config, load_soul_prompt
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("microagent.claude")
 
 STATE_FILE = os.path.join(DATA_DIR, "session.json")
+USAGE_FILE = os.path.join(DATA_DIR, "usage.json")
 DEFAULT_ROTATION_TIME = "03:00"
 
 
@@ -106,6 +108,8 @@ class Claude(AgentType):
         )
 
         new_session: str | None = None
+        last_result: ResultMessage | None = None
+        last_rate_limit: RateLimitEvent | None = None
         try:
             async for msg in query(prompt=prompt, options=options):
                 self._log_stream_message(msg)
@@ -114,6 +118,10 @@ class Claude(AgentType):
                     sid = self._extract_session_id(msg)
                     if sid:
                         new_session = sid
+                elif isinstance(msg, ResultMessage):
+                    last_result = msg
+                elif isinstance(msg, RateLimitEvent):
+                    last_rate_limit = msg
         except Exception:
             if prior_session:
                 log.exception("claude wake failed with resume=%s; clearing", prior_session)
@@ -121,6 +129,7 @@ class Claude(AgentType):
             raise
         finally:
             await self._emit_idle(triggers)
+            self._save_usage(last_result, last_rate_limit)
 
         effective_session = new_session or prior_session
         new_state: dict[str, Any] = {
@@ -160,6 +169,48 @@ class Claude(AgentType):
                 json.dump(state, f)
         except OSError:
             log.exception("failed to save session state")
+
+    @staticmethod
+    def _save_usage(
+        result: ResultMessage | None,
+        rate_limit: RateLimitEvent | None,
+    ) -> None:
+        """Persist the last wake's token usage + rate-limit snapshot so the
+        dashboard can surface them. Merges with prior file so a rate-limit
+        event from a wake that produced no ResultMessage still sticks."""
+        prior: dict[str, Any] = {}
+        try:
+            with open(USAGE_FILE) as f:
+                data: Any = json.load(f)
+            if isinstance(data, dict):
+                prior = cast(dict[str, Any], data)
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            pass
+
+        out: dict[str, Any] = dict(prior)
+        if result is not None:
+            out["last_wake"] = {
+                "at": datetime.now().isoformat(timespec="seconds"),
+                "usage": result.usage,
+                "total_cost_usd": result.total_cost_usd,
+                "num_turns": result.num_turns,
+                "duration_ms": result.duration_ms,
+                "subtype": result.subtype,
+            }
+        if rate_limit is not None:
+            info = rate_limit.rate_limit_info
+            out["rate_limit"] = {
+                "status": info.status,
+                "resets_at": info.resets_at,
+                "rate_limit_type": info.rate_limit_type,
+                "utilization": info.utilization,
+                "overage_status": info.overage_status,
+            }
+        try:
+            with open(USAGE_FILE, "w") as f:
+                json.dump(out, f)
+        except OSError:
+            log.exception("failed to save usage")
 
     @staticmethod
     def _extract_session_id(msg: SystemMessage) -> str | None:
