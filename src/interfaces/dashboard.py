@@ -7,6 +7,7 @@ import mimetypes
 import os
 import posixpath
 import queue
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -260,6 +261,22 @@ def _exit_soon() -> None:
     threading.Timer(0.5, _bye).start()
 
 
+def _git_pull(branch: str = "main") -> str:
+    """Fast-forward /repo to origin/<branch>. Returns the new short SHA."""
+    subprocess.run(
+        ["git", "-C", "/repo", "fetch", "origin", branch],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", "/repo", "reset", "--hard", f"origin/{branch}"],
+        check=True, capture_output=True,
+    )
+    return subprocess.run(
+        ["git", "-C", "/repo", "rev-parse", "--short", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
 MOCK_ENV = {
     "OPENAI_API_KEY": "sk-demo-••••",
     "EMAIL_PASSWORD": "••••",
@@ -415,6 +432,19 @@ def _make_handler(dash: "Dashboard"):
                 self._json(200, {"ok": True})
                 _exit_soon()
                 return
+            if path == "/api/update":
+                try:
+                    sha = _git_pull()
+                    self._json(200, {"ok": True, "sha": sha})
+                    _exit_soon()
+                except subprocess.CalledProcessError as e:
+                    stderr = (e.stderr or b"").decode(errors="replace")
+                    log.error("update failed: %s", stderr)
+                    self._json(500, {"error": stderr or str(e)})
+                except Exception as e:
+                    log.exception("update failed")
+                    self._json(500, {"error": str(e)})
+                return
             if path == "/api/chat/send":
                 try:
                     payload = json.loads(body)
@@ -559,8 +589,9 @@ button{padding:.5rem 1rem;cursor:pointer}
 
 <section>
 <h2>Process</h2>
+<button type="button" onclick="update()" {{readonly}}>update &amp; restart</button>
 <button type="button" onclick="restart()" {{readonly}}>restart agent</button>
-<span class="status">docker restarts the container automatically</span>
+<span class="status">update pulls origin/main; docker respawns the container</span>
 </section>
 
 <script>
@@ -618,6 +649,13 @@ async function restart(){
   if(!confirm('restart now?'))return;
   await fetch('/api/restart',{method:'POST'});
   alert('restarting…');
+}
+async function update(){
+  if(!confirm('pull origin/main and restart?'))return;
+  const r=await fetch('/api/update',{method:'POST'});
+  const d=await r.json().catch(()=>({}));
+  if(r.ok) alert('updated to '+(d.sha||'?')+', restarting…');
+  else alert('update failed: '+(d.error||r.status));
 }
 
 let _chatAfter=0;
