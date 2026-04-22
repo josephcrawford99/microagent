@@ -7,6 +7,10 @@ from typing import TYPE_CHECKING, Any, cast
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    HookCallback,
+    HookContext,
+    HookInput,
+    HookJSONOutput,
     HookMatcher,
     McpServerConfig,
     ResultMessage,
@@ -261,7 +265,7 @@ def _parse_rotation_time(raw: str) -> time:
         return time(hour=int(hh), minute=int(mm))
 
 
-def _make_space_stop_hook():
+def _make_space_stop_hook() -> HookCallback:
     """Stop hook: on the first stop of a wake, nudge the agent to update its
     space if anything from this exchange is worth capturing. The SDK sets
     `stop_hook_active=True` once a Stop hook has blocked, so subsequent stops
@@ -269,7 +273,11 @@ def _make_space_stop_hook():
     """
     fired = {"done": False}
 
-    async def _hook(input_data, tool_use_id, context):
+    async def _hook(
+        input_data: HookInput,
+        tool_use_id: str | None,
+        context: HookContext,
+    ) -> HookJSONOutput:
         del tool_use_id, context
         if fired["done"] or input_data.get("stop_hook_active"):
             return {}
