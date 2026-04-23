@@ -209,12 +209,21 @@ def _exit_soon() -> None:
 
 
 def _git_pull(branch: str = "main") -> str:
+    """Make /repo byte-identical to origin/<branch>. Destructive: drops
+    tracked changes (reset --hard) and wipes every untracked or ignored
+    file (clean -fdx), including `__pycache__/`, `.env`, `.DS_Store`, and
+    any stray files the agent may have written. The canonical .env lives
+    in /config/ and is never touched."""
     subprocess.run(
         ["git", "-C", "/repo", "fetch", "origin", branch],
         check=True, capture_output=True,
     )
     subprocess.run(
         ["git", "-C", "/repo", "reset", "--hard", f"origin/{branch}"],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", "/repo", "clean", "-fdx"],
         check=True, capture_output=True,
     )
     return subprocess.run(
