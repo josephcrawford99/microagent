@@ -295,7 +295,6 @@ def _git_pull(branch: str = "main") -> str:
 MOCK_ENV = {
     "OPENAI_API_KEY": "sk-demo-••••",
     "EMAIL_PASSWORD": "••••",
-    "META_TOKEN": "••••",
     "DASHBOARD_TOKEN": "••••",
 }
 
