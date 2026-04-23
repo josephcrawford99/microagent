@@ -130,10 +130,10 @@ function applyRole() {
 let _env = {};
 let _interfaces = [];
 
-// Interfaces whose enabled state has been toggled since last restart.
-// A running interface object is built once at container start, so flipping
-// enabled in config.toml doesn't take effect until the process restarts.
-const _pendingRestart = new Set();
+// Baseline = enabled-map at page load. The running process booted from
+// config.toml, so this matches what it's actually running. A row shows
+// "restart to apply" iff current != baseline; toggling back clears it.
+let _baselineEnabled = {};
 
 function renderInterfaces() {
   const host = document.getElementById('interfaces');
@@ -146,7 +146,8 @@ function renderInterfaces() {
     const missing = iface.required_env.filter(k => !_env[k]);
     const missingHtml = (iface.enabled && missing.length)
       ? `<span class="imiss">missing: ${missing.join(', ')}</span>` : '';
-    const pendingHtml = _pendingRestart.has(iface.name)
+    const pending = _baselineEnabled[iface.name] !== iface.enabled;
+    const pendingHtml = pending
       ? '<span class="imiss" style="color:#a60">restart to apply</span>' : '';
     row.innerHTML =
       `<input type="checkbox" ${iface.enabled?'checked':''} data-owner-only onchange="onToggle('${iface.name}', this)">` +
@@ -187,7 +188,6 @@ async function onToggle(name, cb) {
           if (!r.ok) { save.disabled = false; return; }
           iface.enabled = true;
           iface.missing_env = iface.required_env.filter(k2 => !_env[k2]);
-          _pendingRestart.add(name);
           renderInterfaces();
         };
         cancel.onclick = () => { p.remove(); };
@@ -200,7 +200,6 @@ async function onToggle(name, cb) {
   const r = await fetch('/api/interface/toggle', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name, enabled: cb.checked})});
   if (!r.ok) { cb.checked = !cb.checked; return; }
   iface.enabled = cb.checked;
-  _pendingRestart.add(name);
   renderInterfaces();
 }
 
@@ -382,6 +381,7 @@ async function bootstrap() {
   ROLE = d.role || 'owner';
   _env = d.env || {};
   _interfaces = d.interfaces || [];
+  _baselineEnabled = Object.fromEntries(_interfaces.map(i => [i.name, i.enabled]));
   document.getElementById('config').value = d.config_toml || '';
   renderEnv(_env);
   renderInterfaces();
