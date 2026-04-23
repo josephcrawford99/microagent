@@ -282,7 +282,7 @@ async function pollUsage(){
 }
 
 async function bootstrap() {
-  const r = await fetch('/api/bootstrap');
+  const r = await fetch('/api/bootstrap', {cache: 'no-store'});
   if (!r.ok) { document.body.textContent='bootstrap failed: '+r.status; return; }
   const d = await r.json();
   ROLE = d.role || 'owner';
@@ -290,6 +290,9 @@ async function bootstrap() {
   renderEnv(d.env || {});
   applyRole();
   renderUsage(d.usage || {});
+  document.getElementById('chat-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') sendChat();
+  });
   pollChat();
   setInterval(pollChat, 1500);
   pollUsage();

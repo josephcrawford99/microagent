@@ -274,6 +274,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # Dashboard HTML/JSON is dynamic by nature; cached copies after a
+        # server rebuild leave tabs out of sync with the running process.
+        self.send_header("Cache-Control", "no-store")
         for k, v in extra or []:
             self.send_header(k, v)
         self.end_headers()
