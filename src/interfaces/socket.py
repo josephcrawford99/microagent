@@ -1,3 +1,8 @@
+"""TCP line-protocol interface. One line in = one Message; agent replies go
+to every connected client. Useful for `nc <host> <port>` smoke tests."""
+
+from __future__ import annotations
+
 import logging
 import queue
 import socket
@@ -5,30 +10,22 @@ import threading
 from typing import Optional
 
 from lib.interface import Interface, Message, Trigger
+from lib.settings import SocketSettings
 
 log = logging.getLogger("microagent.socket")
 
 
 class Socket(Interface):
-    """TCP line-protocol interface.
-
-    One line in = one Message. Agent sends go to every currently-connected
-    client. Use with `nc <host> <port>` — type a line, get lines back.
-
-    Runs a thread-per-client accept loop so trigger_wake()/receive() stay sync
-    and cheap. Clients with broken pipes are dropped silently on next send.
-    """
-
     name = "socket"
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8765) -> None:
-        self.host = host
-        self.port = port
+    def __init__(self, agent_id: str, settings: SocketSettings) -> None:
+        super().__init__(agent_id)
+        self.host = settings.host
+        self.port = settings.port
         self._inbox: "queue.Queue[Message]" = queue.Queue()
         self._clients: list[socket.socket] = []
         self._lock = threading.Lock()
-        t = threading.Thread(target=self._serve, daemon=True)
-        t.start()
+        threading.Thread(target=self._serve, daemon=True).start()
 
     def _serve(self) -> None:
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

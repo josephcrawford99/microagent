@@ -1,55 +1,70 @@
 #!/usr/bin/env python3
 """Microagent daemon — long-running poll loop.
 
-Polls each interface every POLL_INTERVAL seconds. When any interface returns a
-Trigger, wakes the agent with all active triggers and lets it act via the
+Polls each interface every POLL_INTERVAL seconds. When any interface returns
+a Trigger, wakes the agent with all active triggers and lets it act via the
 interface's MCP tools.
 """
+
+from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import logging.handlers
-import os
-from typing import Any
+import shutil
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Python owns .env — docker-compose doesn't pass secrets through, so a
-# restart after `!env` picks up new values directly from the file.
-load_dotenv("/repo/.env")
+# /config/.env is the canonical secrets file; load before any Settings
+# instantiation so the values are available as environment variables.
+load_dotenv("/config/.env", override=True)
 
 from agent_types import AGENT_TYPES
-from interfaces import INTERFACES
-from lib.config import DATA_DIR, load_config
+from interfaces.email import Email
+from interfaces.imessage import IMessage
+from interfaces.socket import Socket
+from interfaces.telegram import Telegram
+from interfaces.web_chat import WebChat
+from lib.agent import AgentType
 from lib.interface import Interface
+from lib.settings import CONFIG_DIR, CONFIG_TOML, SOUL_MD, Settings
+from dashboard import DashboardServer
 
 POLL_INTERVAL = 3  # seconds
 
+EXAMPLES_DIR = Path(__file__).parent / "examples"
 
-def load_interfaces(config: dict[str, Any]) -> list[Interface]:
-    interfaces: list[Interface] = []
-    for name, conf in config.get("interfaces", {}).items():
-        kwargs = dict(conf)
-        if not kwargs.pop("enabled", False):
-            continue
-        if name not in INTERFACES:
-            raise RuntimeError(
-                f"unknown interface '{name}', available: {list(INTERFACES)}"
+
+def seed_config_if_missing() -> None:
+    """First-boot: copy example config/soul into /config/ if they aren't there.
+    .env is never seeded — secrets must be placed intentionally."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    if not CONFIG_TOML.exists():
+        src = EXAMPLES_DIR / "config.example.toml"
+        if src.exists():
+            shutil.copy(src, CONFIG_TOML)
+            logging.getLogger("microagent").info(
+                "seeded %s from example", CONFIG_TOML
             )
-        interfaces.append(INTERFACES[name](**kwargs))
-    return interfaces
+    if not SOUL_MD.exists():
+        src = EXAMPLES_DIR / "soul.example.md"
+        if src.exists():
+            shutil.copy(src, SOUL_MD)
+            logging.getLogger("microagent").info(
+                "seeded %s from example", SOUL_MD
+            )
 
 
-def _ensure_js_workspace() -> None:
-    """Seed /data/js as a persistent Node workspace so the agent can `npm
-    install` without wrecking the image or losing deps across rebuilds.
-    Idempotent: only writes package.json if it doesn't already exist."""
-    js_dir = os.path.join(DATA_DIR, "js")
-    os.makedirs(js_dir, exist_ok=True)
-    pkg = os.path.join(js_dir, "package.json")
-    if not os.path.exists(pkg):
-        with open(pkg, "w") as f:
+def ensure_js_workspace() -> None:
+    """Seed /space/js as a persistent Node workspace so the agent can `npm
+    install` without wrecking the image or losing deps across rebuilds."""
+    js_dir = Path("/space/js")
+    js_dir.mkdir(parents=True, exist_ok=True)
+    pkg = js_dir / "package.json"
+    if not pkg.exists():
+        with pkg.open("w") as f:
             json.dump(
                 {
                     "name": "microagent-js",
@@ -63,39 +78,87 @@ def _ensure_js_workspace() -> None:
             f.write("\n")
 
 
-async def main():
-    os.makedirs(DATA_DIR, exist_ok=True)
-    _ensure_js_workspace()
+def build_interfaces(settings: Settings) -> list[Interface]:
+    """Instantiate every enabled interface from the typed settings.
+
+    Each interface has slightly different construction needs (which secrets
+    it pulls from Settings, whether it needs a bind path), so we do it
+    explicitly — generic factories would be shorter but less honest."""
+    agent_id = settings.agent_id
+    out: list[Interface] = []
+    ic = settings.interfaces
+
+    if ic.socket.enabled:
+        out.append(Socket(agent_id, ic.socket))
+    if ic.email.enabled:
+        out.append(Email(
+            agent_id,
+            ic.email,
+            password=settings.email_password.get_secret_value(),
+        ))
+    if ic.telegram.enabled:
+        out.append(Telegram(
+            agent_id,
+            ic.telegram,
+            token=settings.telegram_bot_token.get_secret_value(),
+        ))
+    if ic.imessage.enabled:
+        out.append(IMessage(agent_id, ic.imessage))
+    if ic.web_chat.enabled:
+        out.append(WebChat(agent_id, ic.web_chat))
+    return out
+
+
+def build_agent(settings: Settings, interfaces: list[Interface]) -> AgentType:
+    name = settings.agent_type
+    if name not in AGENT_TYPES:
+        raise RuntimeError(
+            f"unknown agent type '{name}', available: {list(AGENT_TYPES)}"
+        )
+    return AGENT_TYPES[name](settings.agent_id, settings, interfaces)
+
+
+def setup_logging() -> logging.Logger:
+    Path("/state").mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         handlers=[
             logging.StreamHandler(),
             logging.handlers.RotatingFileHandler(
-                os.path.join(DATA_DIR, "agent.log"),
+                "/state/agent.log",
                 maxBytes=2 * 1024 * 1024,
                 backupCount=3,
             ),
         ],
     )
-    log = logging.getLogger("microagent")
+    return logging.getLogger("microagent")
 
-    config = load_config()
-    interfaces = load_interfaces(config)
 
-    agent_name = config.get("agent_type")
-    if not agent_name:
-        raise RuntimeError("config missing 'agent_type'")
-    if agent_name not in AGENT_TYPES:
-        raise RuntimeError(
-            f"unknown agent type '{agent_name}', available: {list(AGENT_TYPES)}"
+async def main() -> None:
+    log = setup_logging()
+    seed_config_if_missing()
+    ensure_js_workspace()
+
+    settings = Settings()
+    (Path("/state") / settings.agent_id).mkdir(parents=True, exist_ok=True)
+
+    interfaces = build_interfaces(settings)
+    agent = build_agent(settings, interfaces)
+
+    if settings.dashboard.enabled:
+        web_chat = next((i for i in interfaces if i.name == "web_chat"), None)
+        dashboard = DashboardServer(
+            settings=settings, agent=agent, web_chat=web_chat
         )
-    agent = AGENT_TYPES[agent_name](interfaces=interfaces)
+        dashboard.start()
 
     log.info(
-        "microagent up | agent=%s interfaces=%s",
+        "microagent up | agent=%s (id=%s) interfaces=%s dashboard=%s",
         agent.name,
+        settings.agent_id,
         [i.name for i in interfaces],
+        settings.dashboard.enabled,
     )
 
     while True:

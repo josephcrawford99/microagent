@@ -4,18 +4,18 @@ services:
     container_name: microagent
     restart: unless-stopped
     ports:
-      - "8765:8765"
-      - "8766:8766"
-      - "8767:8767"
+      - "8765:8765"   # socket interface
+      - "8767:8767"   # dashboard
+    env_file: ${HOME}/microagent-config/.env
     volumes:
-      - .:/repo
-      - agent-data:/data
-      # iMessage is receive-only: chat.db is bind-mounted read-only for the
-      # passive inbound feed. No outbox — sending goes through Telegram.
-      - ${HOME}/Library/Messages/chat.db:/data/chat.db:ro
+      - .:/repo                                        # source tree
+      - ${HOME}/microagent-config:/config              # config + .env + soul.md
+      - agent-state:/state                             # harness state
+      - agent-space:/space                             # agent scratch (cwd)
+      - ${HOME}/Library/Messages:/mnt/imessage:ro      # iMessage read-only feed
     environment:
       # Claude CLI refuses --dangerously-skip-permissions as root; this env
-      # marks the process as sandboxed (docker container is our sandbox) so
+      # marks the process as sandboxed (the container is our sandbox) so
       # permission_mode="bypassPermissions" works.
       - IS_SANDBOX=1
 
@@ -33,4 +33,5 @@ services:
       - public
 
 volumes:
-  agent-data:
+  agent-state:
+  agent-space:

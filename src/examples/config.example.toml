@@ -1,0 +1,47 @@
+# microagent configuration. Everything non-secret lives here.
+# Secrets (tokens, passwords) go in /config/.env — never here.
+#
+# The dashboard writes this file directly; a human can also edit by hand.
+# Changes take effect on next restart.
+
+agent_type = "claude"
+agent_id = "primary"
+
+[user]
+name = ""
+
+[agents.claude]
+rotation_time = "03:00"
+
+[dashboard]
+enabled = true
+host = "0.0.0.0"
+port = 8767
+public_url = ""
+
+[interfaces.socket]
+enabled = true
+host = "0.0.0.0"
+port = 8765
+
+[interfaces.web_chat]
+enabled = true
+
+[interfaces.email]
+enabled = false
+username = ""
+imap_host = "imap.gmail.com"
+imap_port = 993
+smtp_host = "smtp.gmail.com"
+smtp_port = 587
+allowed_senders = []
+
+[interfaces.telegram]
+enabled = false
+allowed_chat_ids = []
+poll_timeout = 0
+
+[interfaces.imessage]
+enabled = false
+db_path = "/mnt/imessage/chat.db"
+allowed_senders = []

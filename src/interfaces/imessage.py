@@ -1,42 +1,37 @@
-import json
+"""iMessage receive-only feed via host's chat.db (read-only bind-mount at
+/mnt/imessage/chat.db by default).
+
+No send path — outbound is delegated to other channels. `allowed_senders`
+filters at trigger time so unknown senders don't cost a wake. Watermark
+(last observed ROWID) persists via ComponentState; first boot seeds it
+to current max ROWID to avoid flooding the agent with historical messages.
+"""
+
+from __future__ import annotations
+
 import logging
-import os
 import sqlite3
 from typing import Any, Optional
 
 from claude_agent_sdk import SdkMcpTool
 
 from lib.interface import Interface, Message, Trigger
+from lib.settings import IMessageSettings
+from lib.state import ComponentState
 
 log = logging.getLogger("microagent.imessage")
 
 
 class IMessage(Interface):
-    """iMessage receive-only feed via host's chat.db (read-only bind-mount).
-
-    No send path — sending is delegated to other channels. The agent uses this
-    interface purely to observe messages you receive during the day.
-
-    `allowed_senders` is optional: empty list = ingest every inbound message;
-    non-empty list filters to those handles at trigger time so unknown senders
-    don't cost a wake.
-    """
-
     name = "imessage"
 
-    def __init__(
-        self,
-        db_path: str = "/data/chat.db",
-        state_path: str = "/data/imessage_state.json",
-        allowed_senders: Optional[list[str]] = None,
-    ) -> None:
-        self.db_path = db_path
-        self.state_path = state_path
-        self.allowed_senders = [s.lower() for s in (allowed_senders or [])]
-        # Seed last_seen to current max ROWID so we don't flood on first boot
-        # with years of backlog. If state file exists, keep it.
-        if not os.path.exists(self.state_path):
-            self._save_last_seen(self._current_max_rowid())
+    def __init__(self, agent_id: str, settings: IMessageSettings) -> None:
+        super().__init__(agent_id)
+        self.db_path = settings.db_path
+        self.allowed_senders = [s.lower() for s in settings.allowed_senders]
+        self._state = ComponentState(agent_id, self.name)
+        # First-boot: seed watermark to current max ROWID so we don't flood.
+        self._state.load_or_init(lambda: {"last_seen": self._current_max_rowid()})
 
     def trigger_wake(self) -> Optional[Trigger]:
         try:
@@ -64,7 +59,7 @@ class IMessage(Interface):
         return out
 
     def tools(self) -> list[SdkMcpTool[Any]]:
-        # Only expose the receive tool — no outbound path for this interface.
+        # Receive-only — no outbound tool.
         receive_tool, _ = super().tools()
         return [receive_tool]
 
@@ -83,8 +78,8 @@ class IMessage(Interface):
                 sql = (
                     "SELECT COUNT(*) FROM message m "
                     "JOIN handle h ON m.handle_id = h.ROWID "
-                    f"WHERE m.ROWID > ? AND m.is_from_me = 0 "
-                    f"AND m.text IS NOT NULL AND m.text != '' "
+                    "WHERE m.ROWID > ? AND m.is_from_me = 0 "
+                    "AND m.text IS NOT NULL AND m.text != '' "
                     f"AND LOWER(h.id) IN ({placeholders})"
                 )
                 cur = conn.execute(sql, [last_seen, *self.allowed_senders])
@@ -122,16 +117,9 @@ class IMessage(Interface):
 
     def _load_last_seen(self) -> int:
         try:
-            with open(self.state_path) as f:
-                return int(json.load(f).get("last_seen", 0))
-        except FileNotFoundError:
-            return 0
-        except Exception:
-            log.exception("corrupt imessage state; resetting to 0")
+            return int(self._state.load().get("last_seen", 0))
+        except (TypeError, ValueError):
             return 0
 
     def _save_last_seen(self, rowid: int) -> None:
-        tmp = self.state_path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump({"last_seen": int(rowid)}, f)
-        os.rename(tmp, self.state_path)
+        self._state.save({"last_seen": int(rowid)})

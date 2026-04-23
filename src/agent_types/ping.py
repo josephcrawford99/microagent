@@ -1,3 +1,11 @@
+"""Smoke-test agent. No LLM — iterates triggers and replies 'pong' to 'ping'.
+
+Builds the reply via the interface's own `message_class` (so it works with
+EmailMessage etc.) and swaps `to` / `sender` so the reply routes back to
+the original sender on any interface."""
+
+from __future__ import annotations
+
 import logging
 
 from lib.agent import AgentType
@@ -6,13 +14,6 @@ log = logging.getLogger("microagent.ping")
 
 
 class Ping(AgentType):
-    """Smoke-test agent. No LLM — iterates triggers and replies 'pong' to 'ping'.
-
-    Builds the reply via the interface's own `message_class` (so it works with
-    EmailMessage, etc.) and swaps `to` / `sender` so the reply routes back to
-    the original sender on any interface.
-    """
-
     name = "ping"
 
     async def on_wake(self, triggers):
