@@ -14,8 +14,8 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from lib.interface import Interface, Trigger
     from lib.settings import Settings
+    from lib.source import Source, Trigger
 
 log = logging.getLogger("microagent.agent")
 
@@ -24,10 +24,12 @@ class AgentType:
     name: str
 
     def __init__(
-        self, agent_id: str, settings: "Settings", interfaces: list["Interface"]
+        self, agent_id: str, settings: "Settings", interfaces: list["Source"]
     ) -> None:
         self.agent_id = agent_id
         self.settings = settings
+        # Named `interfaces` for back-compat — the list now holds any Source
+        # (send-capable Interface or receive-only Source subclass).
         self.interfaces = interfaces
 
     async def wake(self, triggers: list["Trigger"]) -> None:
@@ -51,14 +53,16 @@ class AgentType:
         """Notify each triggering interface of the failure, then drain it so
         the daemon doesn't busy-loop on the same trigger."""
         body = f"[microagent error] {type(error).__name__}: {error}"
+        from lib.interface import Interface  # local: avoid circular import
         for t in triggers:
             iface = t.interface
-            try:
-                await iface.send(
-                    iface.message_class(body=body, sender="agent", to="user")
-                )
-            except Exception:
-                log.exception("failed to notify %s of wake failure", iface.name)
+            if isinstance(iface, Interface):
+                try:
+                    await iface.send(
+                        iface.message_class(body=body, sender="agent", to="user")
+                    )
+                except Exception:
+                    log.exception("failed to notify %s of wake failure", iface.name)
             try:
                 discarded = await iface.receive()
                 if discarded:

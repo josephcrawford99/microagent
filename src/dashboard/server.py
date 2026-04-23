@@ -34,6 +34,7 @@ import tomli_w
 
 from interfaces import INTERFACES
 from lib.settings import CONFIG_ENV, CONFIG_TOML, Settings
+from sources import SOURCES
 
 from .templates import LOGIN_HTML, PAGE_HTML
 
@@ -169,44 +170,65 @@ def _write_config_text(text: str) -> None:
     os.replace(tmp, CONFIG_TOML)
 
 
+def _registry_kind(name: str) -> str | None:
+    """Return 'interfaces' or 'sources' depending on which registry owns the
+    given input name. None if unknown."""
+    if name in INTERFACES:
+        return "interfaces"
+    if name in SOURCES:
+        return "sources"
+    return None
+
+
 def _interfaces_status(env: dict[str, str], config_text: str) -> list[dict[str, Any]]:
-    """One row per discovered interface: name, enabled (from config.toml),
-    required_env, and which of those are currently missing from .env."""
+    """One row per discovered wake-input (Interface or Source): name, kind,
+    enabled (from config.toml), required_env, and which of those are
+    currently missing from .env."""
     import tomllib
 
     try:
         parsed = tomllib.loads(config_text)
     except Exception:
         parsed = {}
-    ic = parsed.get("interfaces", {}) if isinstance(parsed, dict) else {}
-    out: list[dict[str, Any]] = []
-    for name in sorted(INTERFACES):
-        cls = INTERFACES[name]
-        section = ic.get(name, {}) if isinstance(ic, dict) else {}
+    interfaces_section = parsed.get("interfaces", {}) if isinstance(parsed, dict) else {}
+    sources_section = parsed.get("sources", {}) if isinstance(parsed, dict) else {}
+
+    def row(kind: str, name: str, cls) -> dict[str, Any]:
+        section_root = interfaces_section if kind == "interfaces" else sources_section
+        section = section_root.get(name, {}) if isinstance(section_root, dict) else {}
         enabled = bool(section.get("enabled", False)) if isinstance(section, dict) else False
         required = list(getattr(cls, "required_env", []) or [])
         missing = [k for k in required if not env.get(k)]
-        out.append({
+        return {
             "name": name,
+            "kind": kind,
             "enabled": enabled,
             "required_env": required,
             "missing_env": missing,
-        })
+        }
+
+    out: list[dict[str, Any]] = []
+    for name in sorted(INTERFACES):
+        out.append(row("interfaces", name, INTERFACES[name]))
+    for name in sorted(SOURCES):
+        out.append(row("sources", name, SOURCES[name]))
     return out
 
 
 def _toggle_interface(name: str, enabled: bool) -> None:
-    """Flip [interfaces.<name>].enabled in config.toml, preserving other fields."""
+    """Flip `[<kind>.<name>].enabled` in config.toml where `<kind>` is
+    'interfaces' or 'sources' based on the registry. Preserves other fields."""
     import tomllib
 
-    if name not in INTERFACES:
-        raise ValueError(f"unknown interface: {name}")
+    kind = _registry_kind(name)
+    if kind is None:
+        raise ValueError(f"unknown input: {name}")
     try:
         data = tomllib.loads(CONFIG_TOML.read_text())
     except FileNotFoundError:
         data = {}
-    ifaces = data.setdefault("interfaces", {})
-    section = ifaces.setdefault(name, {})
+    root = data.setdefault(kind, {})
+    section = root.setdefault(name, {})
     section["enabled"] = bool(enabled)
     CONFIG_TOML.parent.mkdir(parents=True, exist_ok=True)
     tmp = CONFIG_TOML.with_suffix(CONFIG_TOML.suffix + ".tmp")

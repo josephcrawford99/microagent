@@ -7,9 +7,8 @@ import logging
 import queue
 import socket
 import threading
-from typing import Optional
 
-from lib.interface import Interface, Message, Trigger
+from lib.interface import Interface, Message
 from lib.settings import SocketSettings
 
 log = logging.getLogger("microagent.socket")
@@ -25,6 +24,9 @@ class Socket(Interface):
         self._inbox: "queue.Queue[Message]" = queue.Queue()
         self._clients: list[socket.socket] = []
         self._lock = threading.Lock()
+
+    async def start(self, trigger_q) -> None:
+        await super().start(trigger_q)
         threading.Thread(target=self._serve, daemon=True).start()
 
     def _serve(self) -> None:
@@ -59,6 +61,7 @@ class Socket(Interface):
                     text = line.decode("utf-8", errors="replace").rstrip("\r").strip()
                     if text:
                         self._inbox.put(Message(body=text, sender="user", to="agent"))
+                        self._signal()
         except Exception:
             log.exception("client recv error")
         finally:
@@ -70,11 +73,6 @@ class Socket(Interface):
             except Exception:
                 pass
             log.info("socket client disconnected: %s", addr)
-
-    def trigger_wake(self) -> Optional[Trigger]:
-        if self._inbox.empty():
-            return None
-        return Trigger(interface=self)
 
     async def receive(self) -> list[Message]:
         out: list[Message] = []

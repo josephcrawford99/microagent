@@ -11,19 +11,23 @@ real `send()` deletes it so the user never sees a stale "working…" linger.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import urllib.error
 import urllib.request
-from typing import Any, Optional
+from typing import Any
 
-from lib.interface import Interface, Message, Trigger
+from lib.interface import Interface, Message
 from lib.settings import TelegramSettings
 from lib.state import ComponentState
 
 log = logging.getLogger("microagent.telegram")
 
 API_BASE = "https://api.telegram.org"
+DRAIN_TIMEOUT_S = 120
+# Back-off between getUpdates calls after errors, so we don't hammer the API.
+ERROR_BACKOFF_S = 5
 
 
 class Telegram(Interface):
@@ -43,30 +47,51 @@ class Telegram(Interface):
         self._active_chats: set[int] = set()
         # chat_id -> (message_id, last_note) for the live status message.
         self._status: dict[int, tuple[int, str]] = {}
+        self._drain = asyncio.Event()
 
     # --- lifecycle ---
 
-    def trigger_wake(self) -> Optional[Trigger]:
+    async def start(self, trigger_q) -> None:
+        await super().start(trigger_q)
         if not self.token:
-            return None
-        try:
-            updates = self._fetch_updates()
-        except Exception:
-            log.exception("trigger_wake: getUpdates failed")
-            return None
-        allowed = [u for u in updates if self._is_allowed(u)]
-        if not allowed:
-            self._advance_watermark(updates)
-            return None
-        self._pending = allowed
-        self._all_fetched = updates
-        self._active_chats = {
-            (u.get("message") or {}).get("chat", {}).get("id") for u in allowed
-        }
-        self._active_chats.discard(None)
-        # Fresh wake — any stale status msg id is from the previous cycle.
-        self._status = {}
-        return Trigger(interface=self)
+            log.warning("telegram has no bot token; not starting poll loop")
+            return
+        asyncio.create_task(self._poll_loop(), name="telegram-poll")
+
+    async def _poll_loop(self) -> None:
+        """Server-side long-poll. `getUpdates?timeout=N` blocks on the
+        Telegram API for up to N seconds waiting for new updates, so this
+        loop is near-zero-traffic when idle and ~network-RTT latency when
+        a message actually arrives. After enqueuing a trigger, wait for
+        `receive()` to drain before the next fetch — otherwise the same
+        updates would re-signal until the watermark advances."""
+        while True:
+            try:
+                updates = await asyncio.to_thread(self._fetch_updates)
+            except Exception:
+                log.exception("getUpdates failed")
+                await asyncio.sleep(ERROR_BACKOFF_S)
+                continue
+            allowed = [u for u in updates if self._is_allowed(u)]
+            if not allowed:
+                # Blocked chats count against the watermark too, or we'd
+                # loop forever on the same disallowed update_id.
+                self._advance_watermark(updates)
+                continue
+            self._pending = allowed
+            self._all_fetched = updates
+            self._active_chats = {
+                (u.get("message") or {}).get("chat", {}).get("id") for u in allowed
+            }
+            self._active_chats.discard(None)
+            # Fresh wake — any stale status msg id is from the previous cycle.
+            self._status = {}
+            self._drain.clear()
+            self._signal()
+            try:
+                await asyncio.wait_for(self._drain.wait(), timeout=DRAIN_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                log.warning("telegram drain timeout; re-checking")
 
     async def receive(self) -> list[Message]:
         updates = self._pending
@@ -86,6 +111,7 @@ class Telegram(Interface):
                 )
             )
         self._advance_watermark(self._all_fetched or updates)
+        self._drain.set()
         return out
 
     async def indicate_pending(self, note: str) -> None:

@@ -10,7 +10,7 @@ import threading
 import time
 from typing import Optional
 
-from lib.interface import Interface, Message, Trigger
+from lib.interface import Interface, Message
 from lib.settings import WebChatSettings
 
 log = logging.getLogger("microagent.web_chat")
@@ -35,11 +35,6 @@ class WebChat(Interface):
         self._pending_id = 0
 
     # --- Interface contract ---
-
-    def trigger_wake(self) -> Optional[Trigger]:
-        if self._inbox.empty():
-            return None
-        return Trigger(interface=self)
 
     async def receive(self) -> list[Message]:
         out: list[Message] = []
@@ -75,6 +70,7 @@ class WebChat(Interface):
             return
         self._append("user", text)
         self._inbox.put(Message(body=text, sender="web", to="agent"))
+        self._signal()
 
     def get_log(self, after: int) -> dict:
         with self._lock:

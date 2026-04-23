@@ -55,7 +55,8 @@ class EmailSettings(BaseModel):
 class TelegramSettings(BaseModel):
     enabled: bool = False
     allowed_chat_ids: list[int] = Field(default_factory=list)
-    poll_timeout: int = 0
+    # getUpdates long-poll timeout. 30s keeps traffic near-zero while idle.
+    poll_timeout: int = 30
 
 
 class IMessageSettings(BaseModel):
@@ -72,8 +73,11 @@ class InterfacesSettings(BaseModel):
     socket: SocketSettings = SocketSettings()
     email: EmailSettings = EmailSettings()
     telegram: TelegramSettings = TelegramSettings()
-    imessage: IMessageSettings = IMessageSettings()
     web_chat: WebChatSettings = WebChatSettings()
+
+
+class SourcesSettings(BaseModel):
+    imessage: IMessageSettings = IMessageSettings()
 
 
 class DashboardSettings(BaseModel):
@@ -112,6 +116,7 @@ class Settings(BaseSettings):
     # Non-secret, from TOML
     user: UserSettings = UserSettings()
     interfaces: InterfacesSettings = InterfacesSettings()
+    sources: SourcesSettings = SourcesSettings()
     dashboard: DashboardSettings = DashboardSettings()
     agents: AgentsSettings = AgentsSettings()
 

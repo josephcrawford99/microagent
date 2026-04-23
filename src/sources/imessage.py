@@ -1,5 +1,5 @@
-"""iMessage receive-only feed via host's chat.db (read-only bind-mount at
-/mnt/imessage/chat.db by default).
+"""iMessage receive-only source via host's chat.db (read-only bind-mount
+at /mnt/imessage/chat.db by default).
 
 No send path — outbound is delegated to other channels. `allowed_senders`
 filters at trigger time so unknown senders don't cost a wake. Watermark
@@ -9,20 +9,21 @@ to current max ROWID to avoid flooding the agent with historical messages.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
-from typing import Any, Optional
 
-from claude_agent_sdk import SdkMcpTool
-
-from lib.interface import Interface, Message, Trigger
 from lib.settings import IMessageSettings
+from lib.source import Message, Source
 from lib.state import ComponentState
 
 log = logging.getLogger("microagent.imessage")
 
+POLL_INTERVAL_S = 15
+DRAIN_TIMEOUT_S = 120
 
-class IMessage(Interface):
+
+class IMessage(Source):
     name = "imessage"
 
     def __init__(self, agent_id: str, settings: IMessageSettings) -> None:
@@ -32,20 +33,37 @@ class IMessage(Interface):
         self._state = ComponentState(agent_id, self.name)
         # First-boot: seed watermark to current max ROWID so we don't flood.
         self._state.load_or_init(lambda: {"last_seen": self._current_max_rowid()})
+        self._drain = asyncio.Event()
 
-    def trigger_wake(self) -> Optional[Trigger]:
-        try:
-            count = self._count_new_from_allowed()
-        except Exception:
-            log.exception("trigger_wake: chat.db read failed")
-            return None
-        if count == 0:
-            return None
-        return Trigger(interface=self)
+    async def start(self, trigger_q):
+        await super().start(trigger_q)
+        asyncio.create_task(self._poll_loop(), name="imessage-poll")
+
+    async def _poll_loop(self) -> None:
+        """Poll chat.db at POLL_INTERVAL_S. On non-empty: signal, then
+        await drain (receive() sets it) before the next check — so we don't
+        re-signal the same unread run while the agent is still processing."""
+        while True:
+            try:
+                count = await asyncio.to_thread(self._count_new_from_allowed)
+            except Exception:
+                log.exception("chat.db read failed")
+                await asyncio.sleep(POLL_INTERVAL_S)
+                continue
+            if count > 0:
+                self._drain.clear()
+                self._signal()
+                try:
+                    await asyncio.wait_for(
+                        self._drain.wait(), timeout=DRAIN_TIMEOUT_S
+                    )
+                except asyncio.TimeoutError:
+                    log.warning("imessage drain timeout; re-checking")
+            await asyncio.sleep(POLL_INTERVAL_S)
 
     async def receive(self) -> list[Message]:
         last_seen = self._load_last_seen()
-        rows = self._fetch_new(last_seen)
+        rows = await asyncio.to_thread(self._fetch_new, last_seen)
         out: list[Message] = []
         max_rowid = last_seen
         for rowid, sender, text in rows:
@@ -56,12 +74,8 @@ class IMessage(Interface):
             out.append(Message(body=text, sender=sender_lc, to="me"))
         if max_rowid > last_seen:
             self._save_last_seen(max_rowid)
+        self._drain.set()
         return out
-
-    def tools(self) -> list[SdkMcpTool[Any]]:
-        # Receive-only — no outbound tool.
-        receive_tool, _ = super().tools()
-        return [receive_tool]
 
     # --- helpers ---
 

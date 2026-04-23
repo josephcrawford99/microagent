@@ -39,9 +39,12 @@ allowed_senders = []
 [interfaces.telegram]
 enabled = false
 allowed_chat_ids = []
-poll_timeout = 0
+# getUpdates long-poll timeout, in seconds. 30 = near-zero idle traffic,
+# instant wakes when a message lands. Set to 0 to disable long-poll.
+poll_timeout = 30
 
-[interfaces.imessage]
+# Receive-only inputs (no `send` path) live under [sources.*].
+[sources.imessage]
 enabled = false
 db_path = "/mnt/imessage/chat.db"
 allowed_senders = []
