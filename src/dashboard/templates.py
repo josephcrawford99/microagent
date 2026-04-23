@@ -44,11 +44,24 @@ button{padding:.5rem 1rem;cursor:pointer}
 .status{color:#666;font-size:.9rem}
 #demo-banner{background:#ffd;padding:.6rem 1rem;border-bottom:1px solid #cc9;margin:-1rem -1rem 1rem -1rem}
 .disabled-demo{opacity:.5;pointer-events:none}
+#interfaces{display:flex;flex-direction:column;gap:.4rem}
+.iface-row{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;padding:.35rem .5rem;border:1px solid #eee;border-radius:4px}
+.iface-row .iname{font-family:ui-monospace,monospace;min-width:6rem}
+.iface-row .imiss{color:#b00;font-size:.85rem}
+.iface-prompt{display:flex;flex-basis:100%;gap:.4rem;align-items:center;margin-top:.3rem}
+.iface-prompt input{flex:1 1 auto;padding:.4rem;font-family:ui-monospace,monospace;border:1px solid #ccc;border-radius:4px}
+.iface-prompt label{font-family:ui-monospace,monospace;font-size:.85rem;min-width:9rem}
 </style></head>
 <body>
 <div id="demo-banner" hidden><b>Demo mode</b> — all values are empty and changes are not saved.</div>
 <h1>microagent</h1>
 <p class="status">Control panel for secrets and config. Changes take effect after restart.</p>
+
+<section>
+<h2>Interfaces</h2>
+<p class="status" style="margin:.2rem 0 .6rem">Toggle an interface on to enable it. If it needs secrets you don't have yet, you'll be prompted inline. Restart after changes.</p>
+<div id="interfaces"></div>
+</section>
 
 <section>
 <h2>Environment (.env)</h2>
@@ -112,6 +125,87 @@ function applyRole() {
     el.disabled = demo;
     if (demo) el.classList.add('disabled-demo'); else el.classList.remove('disabled-demo');
   });
+}
+
+let _env = {};
+let _interfaces = [];
+
+function renderInterfaces() {
+  const host = document.getElementById('interfaces');
+  if (!host) return;
+  host.innerHTML = '';
+  for (const iface of _interfaces) {
+    const row = document.createElement('div');
+    row.className = 'iface-row';
+    row.dataset.name = iface.name;
+    const missing = iface.required_env.filter(k => !_env[k]);
+    const missingHtml = (iface.enabled && missing.length)
+      ? `<span class="imiss">missing: ${missing.join(', ')}</span>` : '';
+    row.innerHTML =
+      `<input type="checkbox" ${iface.enabled?'checked':''} data-owner-only onchange="onToggle('${iface.name}', this)">` +
+      `<span class="iname">${iface.name}</span>` +
+      (iface.required_env.length ? `<span class="status" style="font-size:.8rem">needs: ${iface.required_env.join(', ')}</span>` : '') +
+      missingHtml +
+      `<span class="status iface-status" style="margin-left:auto;font-size:.85rem"></span>`;
+    host.appendChild(row);
+  }
+  applyRole();
+}
+
+async function onToggle(name, cb) {
+  if (ROLE === 'demo') { cb.checked = !cb.checked; return; }
+  const iface = _interfaces.find(i => i.name === name);
+  const row = cb.closest('.iface-row');
+  const status = row.querySelector('.iface-status');
+  row.querySelectorAll('.iface-prompt').forEach(e => e.remove());
+  if (cb.checked) {
+    const missing = iface.required_env.filter(k => !_env[k]);
+    if (missing.length) {
+      cb.checked = false; // wait until user submits values
+      for (const k of missing) {
+        const p = document.createElement('div');
+        p.className = 'iface-prompt';
+        p.innerHTML = `<label>${k}</label><input type="password" placeholder="${k}"><button type="button">save & enable</button><button type="button" class="cancel">cancel</button>`;
+        const input = p.querySelector('input');
+        const save = p.querySelector('button');
+        const cancel = p.querySelector('.cancel');
+        save.onclick = async () => {
+          const val = input.value.trim();
+          if (!val) return;
+          _env[k] = val;
+          // Post just this key via /api/env — merged with existing entries.
+          const entries = Object.entries(_env).map(([key,value]) => ({key,value}));
+          status.textContent = 'saving…';
+          let r = await fetch('/api/env', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entries})});
+          if (!r.ok) { status.textContent = 'env error'; return; }
+          r = await fetch('/api/interface/toggle', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name, enabled:true})});
+          if (!r.ok) { status.textContent = 'toggle error'; return; }
+          status.textContent = 'saved — restart to apply';
+          await reloadBootstrap();
+        };
+        cancel.onclick = () => { p.remove(); status.textContent = ''; };
+        row.appendChild(p);
+      }
+      if (missing.length) row.querySelector('.iface-prompt input').focus();
+      return;
+    }
+  }
+  status.textContent = 'saving…';
+  const r = await fetch('/api/interface/toggle', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name, enabled: cb.checked})});
+  if (!r.ok) { status.textContent = 'error'; cb.checked = !cb.checked; return; }
+  status.textContent = 'saved — restart to apply';
+  await reloadBootstrap();
+}
+
+async function reloadBootstrap() {
+  const r = await fetch('/api/bootstrap', {cache:'no-store'});
+  if (!r.ok) return;
+  const d = await r.json();
+  _env = d.env || {};
+  _interfaces = d.interfaces || [];
+  document.getElementById('config').value = d.config_toml || '';
+  renderEnv(_env);
+  renderInterfaces();
 }
 
 function renderEnv(entries) {
@@ -286,8 +380,11 @@ async function bootstrap() {
   if (!r.ok) { document.body.textContent='bootstrap failed: '+r.status; return; }
   const d = await r.json();
   ROLE = d.role || 'owner';
+  _env = d.env || {};
+  _interfaces = d.interfaces || [];
   document.getElementById('config').value = d.config_toml || '';
-  renderEnv(d.env || {});
+  renderEnv(_env);
+  renderInterfaces();
   applyRole();
   renderUsage(d.usage || {});
   document.getElementById('chat-input').addEventListener('keydown', e => {

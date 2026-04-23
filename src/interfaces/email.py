@@ -34,6 +34,7 @@ class EmailMessage(Message):
 class Email(Interface):
     name = "email"
     message_class = EmailMessage
+    required_env = ["EMAIL_PASSWORD"]
 
     def __init__(
         self, agent_id: str, settings: EmailSettings, password: str

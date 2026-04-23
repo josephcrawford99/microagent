@@ -32,6 +32,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import tomli_w
 
+from interfaces import INTERFACES
 from lib.settings import CONFIG_ENV, CONFIG_TOML, Settings
 
 from .templates import LOGIN_HTML, PAGE_HTML
@@ -161,6 +162,52 @@ def _write_config_text(text: str) -> None:
     import tomllib
 
     data = tomllib.loads(text)  # raises TOMLDecodeError on bad input
+    CONFIG_TOML.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CONFIG_TOML.with_suffix(CONFIG_TOML.suffix + ".tmp")
+    with tmp.open("wb") as f:
+        tomli_w.dump(data, f)
+    os.replace(tmp, CONFIG_TOML)
+
+
+def _interfaces_status(env: dict[str, str], config_text: str) -> list[dict[str, Any]]:
+    """One row per discovered interface: name, enabled (from config.toml),
+    required_env, and which of those are currently missing from .env."""
+    import tomllib
+
+    try:
+        parsed = tomllib.loads(config_text)
+    except Exception:
+        parsed = {}
+    ic = parsed.get("interfaces", {}) if isinstance(parsed, dict) else {}
+    out: list[dict[str, Any]] = []
+    for name in sorted(INTERFACES):
+        cls = INTERFACES[name]
+        section = ic.get(name, {}) if isinstance(ic, dict) else {}
+        enabled = bool(section.get("enabled", False)) if isinstance(section, dict) else False
+        required = list(getattr(cls, "required_env", []) or [])
+        missing = [k for k in required if not env.get(k)]
+        out.append({
+            "name": name,
+            "enabled": enabled,
+            "required_env": required,
+            "missing_env": missing,
+        })
+    return out
+
+
+def _toggle_interface(name: str, enabled: bool) -> None:
+    """Flip [interfaces.<name>].enabled in config.toml, preserving other fields."""
+    import tomllib
+
+    if name not in INTERFACES:
+        raise ValueError(f"unknown interface: {name}")
+    try:
+        data = tomllib.loads(CONFIG_TOML.read_text())
+    except FileNotFoundError:
+        data = {}
+    ifaces = data.setdefault("interfaces", {})
+    section = ifaces.setdefault(name, {})
+    section["enabled"] = bool(enabled)
     CONFIG_TOML.parent.mkdir(parents=True, exist_ok=True)
     tmp = CONFIG_TOML.with_suffix(CONFIG_TOML.suffix + ".tmp")
     with tmp.open("wb") as f:
@@ -370,6 +417,17 @@ class _Handler(BaseHTTPRequestHandler):
                 log.exception("config save failed")
                 self._json(400, {"error": str(e)})
             return
+        if path == "/api/interface/toggle":
+            try:
+                payload = json.loads(body)
+                name = payload.get("name", "")
+                enabled = bool(payload.get("enabled", False))
+                _toggle_interface(name, enabled)
+                self._json(200, {"ok": True})
+            except Exception as e:
+                log.exception("interface toggle failed")
+                self._json(400, {"error": str(e)})
+            return
         if path == "/api/restart":
             self._json(200, {"ok": True})
             _exit_soon()
@@ -408,14 +466,18 @@ class _Handler(BaseHTTPRequestHandler):
                 "role": "demo",
                 "env": {},
                 "config_toml": "",
+                "interfaces": [],
                 "usage": {},
                 "public_url": self.dash.public_url,
             })
             return
+        env = _read_env()
+        config_text = _read_config_text()
         self._json(200, {
             "role": "owner",
-            "env": _read_env(),
-            "config_toml": _read_config_text(),
+            "env": env,
+            "config_toml": config_text,
+            "interfaces": _interfaces_status(env, config_text),
             "usage": self.dash.agent.get_usage(),
             "public_url": self.dash.public_url,
         })

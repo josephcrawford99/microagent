@@ -20,7 +20,7 @@ port = 8767
 public_url = ""
 
 [interfaces.socket]
-enabled = true
+enabled = false
 host = "0.0.0.0"
 port = 8765
 

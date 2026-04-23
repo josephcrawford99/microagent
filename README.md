@@ -17,31 +17,27 @@ Each top-level dir has one job. Mounts are declared in `docker-compose.yml`.
 ## Quick start
 
 ```fish
-# 1. Config dir with secrets + config
-mkdir -p ~/microagent-config
-cp src/examples/config.example.toml ~/microagent-config/config.toml
-cp src/examples/soul.example.md     ~/microagent-config/soul.md
-cat > ~/microagent-config/.env <<EOF
-CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
-EMAIL_PASSWORD=...
-DASHBOARD_TOKEN=$(openssl rand -hex 24)
-EOF
-
-# 2. Get a Claude OAuth token (uses Claude Max/Pro subscription, no API billing)
+# 1. Get a Claude OAuth token (uses Claude Max/Pro subscription, no API billing)
 docker compose run --rm -it microagent claude setup-token
-# paste the sk-ant-oat01-... value into ~/microagent-config/.env
+# copy the sk-ant-oat01-... value it prints
 
-# 3. Build and start
-docker compose up -d --build
+# 2. Run setup — prompts for the token, seeds config, builds & starts
+./setup.sh
 
-# 4. Talk to it
-echo "ping" | nc 127.0.0.1 8765
-# or: http://127.0.0.1:8767 (dashboard)
+# 3. Open the dashboard at http://127.0.0.1:8767
+#    Enable interfaces (email, telegram, socket, …) from there; the UI
+#    prompts for any missing secrets when you flip a toggle on.
 ```
+
+Only `CLAUDE_CODE_OAUTH_TOKEN` is required. `DASHBOARD_TOKEN` is generated
+automatically. Every other secret (Telegram bot token, email password,
+Cloudflare tunnel token, …) is optional and added from the dashboard as
+needed. The config dir defaults to `~/.config/microagent/` (override with
+`XDG_CONFIG_HOME`).
 
 ## Configuration
 
-`~/microagent-config/config.toml` — everything non-secret. Dashboard writes this file directly; you can also edit by hand. Example:
+`~/.config/microagent/config.toml` — everything non-secret. Dashboard writes this file directly; you can also edit by hand. Example:
 
 ```toml
 agent_type = "claude"
@@ -81,7 +77,7 @@ enabled = true
 port = 8767
 ```
 
-`~/microagent-config/.env` — secrets only (never commit):
+`~/.config/microagent/.env` — secrets only (never commit):
 
 ```
 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
@@ -122,7 +118,7 @@ HTTP control panel at `:8767`. Not an agent interface — it's a separate view t
 
 1. Cloudflare Zero Trust → Networks → Tunnels → Create tunnel → Cloudflared.
 2. Copy the `--token` value.
-3. Add to `~/microagent-config/.env`:
+3. Add to `~/.config/microagent/.env`:
    ```
    CLOUDFLARED_TOKEN=eyJh...
    DASHBOARD_TOKEN=<long-random>

@@ -60,6 +60,7 @@ class Interface:
 
     name: str
     message_class: type[Message] = Message
+    required_env: ClassVar[list[str]] = []
 
     def __init__(self, agent_id: str) -> None:
         self.agent_id = agent_id

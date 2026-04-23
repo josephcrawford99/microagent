@@ -28,6 +28,7 @@ API_BASE = "https://api.telegram.org"
 
 class Telegram(Interface):
     name = "telegram"
+    required_env = ["TELEGRAM_BOT_TOKEN"]
 
     def __init__(
         self, agent_id: str, settings: TelegramSettings, token: str

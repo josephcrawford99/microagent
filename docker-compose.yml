@@ -6,10 +6,10 @@ services:
     ports:
       - "8765:8765"   # socket interface
       - "8767:8767"   # dashboard
-    env_file: ${HOME}/microagent-config/.env
+    env_file: ${XDG_CONFIG_HOME:-${HOME}/.config}/microagent/.env
     volumes:
       - .:/repo                                        # source tree
-      - ${HOME}/microagent-config:/config              # config + .env + soul.md
+      - ${XDG_CONFIG_HOME:-${HOME}/.config}/microagent:/config  # config + .env + soul.md
       - agent-state:/state                             # harness state
       - agent-space:/space                             # agent scratch (cwd)
       - ${HOME}/Library/Messages:/mnt/imessage:ro      # iMessage read-only feed
