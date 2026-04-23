@@ -130,6 +130,11 @@ function applyRole() {
 let _env = {};
 let _interfaces = [];
 
+// Interfaces whose enabled state has been toggled since last restart.
+// A running interface object is built once at container start, so flipping
+// enabled in config.toml doesn't take effect until the process restarts.
+const _pendingRestart = new Set();
+
 function renderInterfaces() {
   const host = document.getElementById('interfaces');
   if (!host) return;
@@ -141,12 +146,14 @@ function renderInterfaces() {
     const missing = iface.required_env.filter(k => !_env[k]);
     const missingHtml = (iface.enabled && missing.length)
       ? `<span class="imiss">missing: ${missing.join(', ')}</span>` : '';
+    const pendingHtml = _pendingRestart.has(iface.name)
+      ? '<span class="imiss" style="color:#a60">restart to apply</span>' : '';
     row.innerHTML =
       `<input type="checkbox" ${iface.enabled?'checked':''} data-owner-only onchange="onToggle('${iface.name}', this)">` +
       `<span class="iname">${iface.name}</span>` +
       (iface.required_env.length ? `<span class="status" style="font-size:.8rem">needs: ${iface.required_env.join(', ')}</span>` : '') +
       missingHtml +
-      `<span class="status iface-status" style="margin-left:auto;font-size:.85rem"></span>`;
+      pendingHtml;
     host.appendChild(row);
   }
   applyRole();
@@ -156,12 +163,11 @@ async function onToggle(name, cb) {
   if (ROLE === 'demo') { cb.checked = !cb.checked; return; }
   const iface = _interfaces.find(i => i.name === name);
   const row = cb.closest('.iface-row');
-  const status = row.querySelector('.iface-status');
   row.querySelectorAll('.iface-prompt').forEach(e => e.remove());
   if (cb.checked) {
     const missing = iface.required_env.filter(k => !_env[k]);
     if (missing.length) {
-      cb.checked = false; // wait until user submits values
+      cb.checked = false;
       for (const k of missing) {
         const p = document.createElement('div');
         p.className = 'iface-prompt';
@@ -172,39 +178,29 @@ async function onToggle(name, cb) {
         save.onclick = async () => {
           const val = input.value.trim();
           if (!val) return;
+          save.disabled = true;
           _env[k] = val;
-          // Post just this key via /api/env — merged with existing entries.
           const entries = Object.entries(_env).map(([key,value]) => ({key,value}));
-          status.textContent = 'saving…';
           let r = await fetch('/api/env', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entries})});
-          if (!r.ok) { status.textContent = 'env error'; return; }
+          if (!r.ok) { save.disabled = false; return; }
           r = await fetch('/api/interface/toggle', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name, enabled:true})});
-          if (!r.ok) { status.textContent = 'toggle error'; return; }
-          status.textContent = 'saved — restart to apply';
-          await reloadBootstrap();
+          if (!r.ok) { save.disabled = false; return; }
+          iface.enabled = true;
+          iface.missing_env = iface.required_env.filter(k2 => !_env[k2]);
+          _pendingRestart.add(name);
+          renderInterfaces();
         };
-        cancel.onclick = () => { p.remove(); status.textContent = ''; };
+        cancel.onclick = () => { p.remove(); };
         row.appendChild(p);
       }
-      if (missing.length) row.querySelector('.iface-prompt input').focus();
+      row.querySelector('.iface-prompt input').focus();
       return;
     }
   }
-  status.textContent = 'saving…';
   const r = await fetch('/api/interface/toggle', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name, enabled: cb.checked})});
-  if (!r.ok) { status.textContent = 'error'; cb.checked = !cb.checked; return; }
-  status.textContent = 'saved — restart to apply';
-  await reloadBootstrap();
-}
-
-async function reloadBootstrap() {
-  const r = await fetch('/api/bootstrap', {cache:'no-store'});
-  if (!r.ok) return;
-  const d = await r.json();
-  _env = d.env || {};
-  _interfaces = d.interfaces || [];
-  document.getElementById('config').value = d.config_toml || '';
-  renderEnv(_env);
+  if (!r.ok) { cb.checked = !cb.checked; return; }
+  iface.enabled = cb.checked;
+  _pendingRestart.add(name);
   renderInterfaces();
 }
 
@@ -317,7 +313,10 @@ function renderPending(p){
   if(!el)return;
   el.textContent=p && p.note ? 'agent is '+p.note+'…' : '';
 }
+let _pollingChat=false;
 async function pollChat(){
+  if(_pollingChat) return;  // guard: interval + post-send both call this; concurrent polls double-render
+  _pollingChat=true;
   try{
     const r=await fetch('/api/chat/poll?after='+_chatAfter);
     if(r.ok){
@@ -326,6 +325,7 @@ async function pollChat(){
       renderPending(d.pending);
     }
   }catch(e){}
+  finally{ _pollingChat=false; }
 }
 async function sendChat(){
   if (ROLE === 'demo') return;
