@@ -59,7 +59,19 @@ button{padding:.5rem 1rem;cursor:pointer}
 .iface-fields textarea{width:100%;min-height:4rem;font-family:ui-monospace,monospace;font-size:.85rem;padding:.35rem;border:1px solid #ccc;border-radius:4px;resize:vertical;box-sizing:border-box}
 .iface-fields .ifield-row{display:flex;gap:.4rem;align-items:center}
 .iface-fields .ifield-err{color:#b00;font-size:.8rem}
-</style></head>
+#chat-log .md{display:inline}
+#chat-log .md p{margin:.2rem 0;display:inline}
+#chat-log .md p+p{margin-top:.4rem;display:block}
+#chat-log .md pre{background:#f0f0f0;padding:.4rem;border-radius:3px;overflow-x:auto;margin:.3rem 0;font-size:.85rem}
+#chat-log .md code{background:#f0f0f0;padding:0 .2rem;border-radius:2px;font-size:.85rem}
+#chat-log .md pre code{background:none;padding:0}
+#chat-log .md ul,#chat-log .md ol{margin:.2rem 0 .2rem 1.4rem;padding:0}
+#chat-log .md blockquote{border-left:3px solid #ccc;margin:.3rem 0;padding-left:.5rem;color:#555}
+#chat-log .md a{color:#036}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.11/dist/purify.min.js"></script>
+</head>
 <body>
 <div id="demo-banner" hidden><b>Demo mode</b> — all values are empty and changes are not saved.</div>
 <h1>microagent</h1>
@@ -447,6 +459,12 @@ async function update(){
 
 let _chatAfter=0;
 const _roleColors={user:'#036',agent:'#060',system:'#a60'};
+if(window.marked) marked.setOptions({breaks:true, gfm:true});
+function _renderBody(body){
+  if(!window.marked || !window.DOMPurify) return {text: body};
+  const html = DOMPurify.sanitize(marked.parse(body||''), {USE_PROFILES:{html:true}});
+  return {html};
+}
 function renderChat(msgs){
   const log=document.getElementById('chat-log');
   if(!log)return;
@@ -458,7 +476,15 @@ function renderChat(msgs){
     who.textContent=m.role+': ';
     who.style.color=_roleColors[m.role]||'#333';
     d.appendChild(who);
-    d.appendChild(document.createTextNode(m.body));
+    const body=_renderBody(m.body);
+    if(body.html!=null){
+      const span=document.createElement('span');
+      span.className='md';
+      span.innerHTML=body.html;
+      d.appendChild(span);
+    } else {
+      d.appendChild(document.createTextNode(body.text));
+    }
     log.appendChild(d);
   }
   if(stick) log.scrollTop=log.scrollHeight;
