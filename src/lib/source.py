@@ -61,6 +61,9 @@ class Source:
     name: str
     message_class: type[Message] = Message
     required_env: ClassVar[list[str]] = []
+    # Interfaces inherit Source and must always wake; source subclasses
+    # override from their settings (defaulting False = agent-polled only).
+    wake_on_event: bool = True
 
     def __init__(self, agent_id: str) -> None:
         self.agent_id = agent_id
@@ -78,7 +81,11 @@ class Source:
     def _signal(self) -> None:
         """Thread-safe: enqueue a Trigger for this Source. Safe to call
         from any thread — hops back to the event loop via
-        call_soon_threadsafe before touching the asyncio.Queue."""
+        call_soon_threadsafe before touching the asyncio.Queue. No-op when
+        wake_on_event is False (passive source — agent reads via tool)."""
+        if not self.wake_on_event:
+            log.debug("%s: wake_on_event=False, dropping signal", self.name)
+            return
         loop = self._loop
         q = self._trigger_q
         if loop is None or q is None:

@@ -199,13 +199,19 @@ def _interfaces_status(env: dict[str, str], config_text: str) -> list[dict[str, 
         enabled = bool(section.get("enabled", False)) if isinstance(section, dict) else False
         required = list(getattr(cls, "required_env", []) or [])
         missing = [k for k in required if not env.get(k)]
-        return {
+        out: dict[str, Any] = {
             "name": name,
             "kind": kind,
             "enabled": enabled,
             "required_env": required,
             "missing_env": missing,
         }
+        if kind == "sources":
+            # Default matches the settings model (False) when the field is
+            # absent from config.toml.
+            out["wake_on_event"] = bool(section.get("wake_on_event", False)) \
+                if isinstance(section, dict) else False
+        return out
 
     out: list[dict[str, Any]] = []
     for name in sorted(INTERFACES):
@@ -218,6 +224,18 @@ def _interfaces_status(env: dict[str, str], config_text: str) -> list[dict[str, 
 def _toggle_interface(name: str, enabled: bool) -> None:
     """Flip `[<kind>.<name>].enabled` in config.toml where `<kind>` is
     'interfaces' or 'sources' based on the registry. Preserves other fields."""
+    _set_input_field(name, "enabled", bool(enabled))
+
+
+def _toggle_source_wake(name: str, wake: bool) -> None:
+    """Flip `[sources.<name>].wake_on_event`. Sources only — interfaces
+    always wake."""
+    if _registry_kind(name) != "sources":
+        raise ValueError(f"wake toggle only valid for sources: {name}")
+    _set_input_field(name, "wake_on_event", bool(wake))
+
+
+def _set_input_field(name: str, field: str, value: Any) -> None:
     import tomllib
 
     kind = _registry_kind(name)
@@ -229,7 +247,7 @@ def _toggle_interface(name: str, enabled: bool) -> None:
         data = {}
     root = data.setdefault(kind, {})
     section = root.setdefault(name, {})
-    section["enabled"] = bool(enabled)
+    section[field] = value
     CONFIG_TOML.parent.mkdir(parents=True, exist_ok=True)
     tmp = CONFIG_TOML.with_suffix(CONFIG_TOML.suffix + ".tmp")
     with tmp.open("wb") as f:
@@ -448,6 +466,17 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True})
             except Exception as e:
                 log.exception("interface toggle failed")
+                self._json(400, {"error": str(e)})
+            return
+        if path == "/api/source/wake_toggle":
+            try:
+                payload = json.loads(body)
+                name = payload.get("name", "")
+                enabled = bool(payload.get("enabled", False))
+                _toggle_source_wake(name, enabled)
+                self._json(200, {"ok": True})
+            except Exception as e:
+                log.exception("source wake toggle failed")
                 self._json(400, {"error": str(e)})
             return
         if path == "/api/restart":

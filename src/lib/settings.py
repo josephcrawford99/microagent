@@ -61,14 +61,15 @@ class TelegramSettings(BaseModel):
 
 class IMessageSettings(BaseModel):
     enabled: bool = False
+    wake_on_event: bool = False
     db_path: str = "/mnt/imessage/chat.db"
-    allowed_senders: list[str] = Field(default_factory=list)
 
 
 class CronSettings(BaseModel):
     # Agent-schedulable wake source. Hard caps below bound how much the agent
     # can spend on self-scheduled wakes; see src/sources/cron.py.
     enabled: bool = False
+    wake_on_event: bool = False
     max_active: int = 8
     min_delay_seconds: int = 60
     max_fires_per_day: int = 24

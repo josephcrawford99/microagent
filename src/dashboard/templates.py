@@ -136,10 +136,11 @@ function applyRole() {
 let _env = {};
 let _interfaces = [];
 
-// Baseline = enabled-map at page load. The running process booted from
-// config.toml, so this matches what it's actually running. A row shows
-// "restart to apply" iff current != baseline; toggling back clears it.
+// Baseline = enabled/wake-map at page load. The running process booted
+// from config.toml, so this matches what it's actually running. A row
+// shows "restart to apply" iff current != baseline; toggling back clears it.
 let _baselineEnabled = {};
+let _baselineWake = {};
 
 function renderInterfaces() {
   const ifaceHost = document.getElementById('interfaces');
@@ -154,12 +155,20 @@ function renderInterfaces() {
     const missing = iface.required_env.filter(k => !_env[k]);
     const missingHtml = (iface.enabled && missing.length)
       ? `<span class="imiss">missing: ${missing.join(', ')}</span>` : '';
-    const pending = _baselineEnabled[iface.name] !== iface.enabled;
-    const pendingHtml = pending
+    const pendingEnabled = _baselineEnabled[iface.name] !== iface.enabled;
+    const pendingWake = iface.kind === 'sources'
+      && _baselineWake[iface.name] !== iface.wake_on_event;
+    const pendingHtml = (pendingEnabled || pendingWake)
       ? '<span class="imiss" style="color:#a60">restart to apply</span>' : '';
+    const wakeHtml = iface.kind === 'sources'
+      ? `<label class="status" style="font-size:.8rem;display:inline-flex;align-items:center;gap:.2rem">` +
+        `<input type="checkbox" ${iface.wake_on_event?'checked':''} data-owner-only onchange="onWakeToggle('${iface.name}', this)">` +
+        `wakes</label>`
+      : '';
     row.innerHTML =
       `<input type="checkbox" ${iface.enabled?'checked':''} data-owner-only onchange="onToggle('${iface.name}', this)">` +
       `<span class="iname">${iface.name}</span>` +
+      wakeHtml +
       (iface.required_env.length ? `<span class="status" style="font-size:.8rem">needs: ${iface.required_env.join(', ')}</span>` : '') +
       missingHtml +
       pendingHtml;
@@ -167,6 +176,15 @@ function renderInterfaces() {
     host.appendChild(row);
   }
   applyRole();
+}
+
+async function onWakeToggle(name, cb) {
+  if (ROLE === 'demo') { cb.checked = !cb.checked; return; }
+  const iface = _interfaces.find(i => i.name === name);
+  const r = await fetch('/api/source/wake_toggle', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name, enabled: cb.checked})});
+  if (!r.ok) { cb.checked = !cb.checked; return; }
+  iface.wake_on_event = cb.checked;
+  renderInterfaces();
 }
 
 async function onToggle(name, cb) {
@@ -391,6 +409,7 @@ async function bootstrap() {
   _env = d.env || {};
   _interfaces = d.interfaces || [];
   _baselineEnabled = Object.fromEntries(_interfaces.map(i => [i.name, i.enabled]));
+  _baselineWake = Object.fromEntries(_interfaces.filter(i => i.kind === 'sources').map(i => [i.name, !!i.wake_on_event]));
   document.getElementById('config').value = d.config_toml || '';
   renderEnv(_env);
   renderInterfaces();

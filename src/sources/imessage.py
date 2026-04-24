@@ -1,10 +1,11 @@
 """iMessage receive-only source via host's chat.db (read-only bind-mount
 at /mnt/imessage/chat.db by default).
 
-No send path — outbound is delegated to other channels. `allowed_senders`
-filters at trigger time so unknown senders don't cost a wake. Watermark
-(last observed ROWID) persists via ComponentState; first boot seeds it
-to current max ROWID to avoid flooding the agent with historical messages.
+No send path — outbound is delegated to other channels. The agent reads
+via the imessage_receive MCP tool; sender filtering (if any) is the agent's
+job. Watermark (last observed ROWID) persists via ComponentState; first
+boot seeds it to current max ROWID to avoid flooding the agent with
+historical messages.
 """
 
 from __future__ import annotations
@@ -28,8 +29,8 @@ class IMessage(Source):
 
     def __init__(self, agent_id: str, settings: IMessageSettings) -> None:
         super().__init__(agent_id)
+        self.wake_on_event = settings.wake_on_event
         self.db_path = settings.db_path
-        self.allowed_senders = [s.lower() for s in settings.allowed_senders]
         self._state = ComponentState(agent_id, self.name)
         # First-boot: seed watermark to current max ROWID so we don't flood.
         self._state.load_or_init(lambda: {"last_seen": self._current_max_rowid()})
@@ -40,17 +41,19 @@ class IMessage(Source):
         asyncio.create_task(self._poll_loop(), name="imessage-poll")
 
     async def _poll_loop(self) -> None:
-        """Poll chat.db at POLL_INTERVAL_S. On non-empty: signal, then
-        await drain (receive() sets it) before the next check — so we don't
-        re-signal the same unread run while the agent is still processing."""
+        """Poll chat.db at POLL_INTERVAL_S. When wake_on_event: signal on
+        new messages and await drain (receive() sets it) before the next
+        check — so we don't re-signal the same unread run while the agent
+        is still processing. Passive (wake_on_event=False): just keep the
+        watermark fresh; agent will pull via imessage_receive on its own."""
         while True:
             try:
-                count = await asyncio.to_thread(self._count_new_from_allowed)
+                count = await asyncio.to_thread(self._count_new)
             except Exception:
                 log.exception("chat.db read failed")
                 await asyncio.sleep(POLL_INTERVAL_S)
                 continue
-            if count > 0:
+            if count > 0 and self.wake_on_event:
                 self._drain.clear()
                 self._signal()
                 try:
@@ -69,8 +72,6 @@ class IMessage(Source):
         for rowid, sender, text in rows:
             max_rowid = max(max_rowid, rowid)
             sender_lc = (sender or "").lower()
-            if self.allowed_senders and sender_lc not in self.allowed_senders:
-                continue
             out.append(Message(body=text, sender=sender_lc, to="me"))
         if max_rowid > last_seen:
             self._save_last_seen(max_rowid)
@@ -84,26 +85,15 @@ class IMessage(Source):
             f"file:{self.db_path}?mode=ro", uri=True, timeout=2.0
         )
 
-    def _count_new_from_allowed(self) -> int:
+    def _count_new(self) -> int:
         last_seen = self._load_last_seen()
         with self._connect() as conn:
-            if self.allowed_senders:
-                placeholders = ",".join("?" * len(self.allowed_senders))
-                sql = (
-                    "SELECT COUNT(*) FROM message m "
-                    "JOIN handle h ON m.handle_id = h.ROWID "
-                    "WHERE m.ROWID > ? AND m.is_from_me = 0 "
-                    "AND m.text IS NOT NULL AND m.text != '' "
-                    f"AND LOWER(h.id) IN ({placeholders})"
-                )
-                cur = conn.execute(sql, [last_seen, *self.allowed_senders])
-            else:
-                cur = conn.execute(
-                    "SELECT COUNT(*) FROM message "
-                    "WHERE ROWID > ? AND is_from_me = 0 "
-                    "AND text IS NOT NULL AND text != ''",
-                    [last_seen],
-                )
+            cur = conn.execute(
+                "SELECT COUNT(*) FROM message "
+                "WHERE ROWID > ? AND is_from_me = 0 "
+                "AND text IS NOT NULL AND text != ''",
+                [last_seen],
+            )
             (count,) = cur.fetchone()
             return int(count)
 

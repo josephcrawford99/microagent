@@ -42,6 +42,7 @@ class Cron(Source):
     def __init__(self, agent_id: str, settings: CronSettings) -> None:
         super().__init__(agent_id)
         self._cfg = settings
+        self.wake_on_event = settings.wake_on_event
         self._state = ComponentState(agent_id, "cron")
         self._wake_sched = asyncio.Event()
         self._lock = asyncio.Lock()
