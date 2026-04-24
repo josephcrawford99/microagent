@@ -104,6 +104,19 @@ Auth: the SDK reads `CLAUDE_CODE_OAUTH_TOKEN` from the environment. Get one with
 - **`imessage`** — read-only host `chat.db` via `/mnt/imessage`. Receive-only; outbound goes via another channel.
 - **`web_chat`** — the agent's side of the dashboard chat box.
 
+## Self-scheduled wakes (cron)
+
+Enable `[sources.cron]` to give the agent five MCP tools for scheduling its own wakes:
+
+- `cron_wake_in(seconds, reason)` — one-shot delay.
+- `cron_wake_at(at, reason)` — one-shot at HH:MM (next occurrence) or an ISO datetime.
+- `cron_wake_daily(time_of_day, reason)` — recurring daily wake at HH:MM.
+- `cron_list()` / `cron_cancel(id)` — inspect and remove pending schedules.
+
+When a schedule fires, the main loop wakes on `cron` and the agent calls `cron_receive` to see the reason it left itself. Schedules persist at `/state/<agent_id>/cron.json` and catch up on boot (one-shots more than 24h past due are discarded; daily schedules advance to the next occurrence). Times are container-local.
+
+Hard caps in config bound the "agent schedules a wake storm" failure mode — defaults are `max_active = 8`, `min_delay_seconds = 60`, `max_fires_per_day = 24`. Violating any of them returns an error to the tool call so the model sees the refusal.
+
 ## Dashboard
 
 HTTP control panel at `:8767`. Not an agent interface — it's a separate view that reads `Settings`, writes `/config/config.toml` via `tomli-w`, rotates `/config/.env`, and proxies chat to the `web_chat` interface.

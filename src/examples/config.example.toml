@@ -48,3 +48,11 @@ poll_timeout = 30
 enabled = false
 db_path = "/mnt/imessage/chat.db"
 allowed_senders = []
+
+# Agent-schedulable wakes (cron_wake_in / _at / _daily MCP tools).
+# The caps bound how much the agent can spend on self-scheduled wakes.
+[sources.cron]
+enabled = false
+max_active = 8
+min_delay_seconds = 60
+max_fires_per_day = 24

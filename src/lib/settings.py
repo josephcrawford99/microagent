@@ -65,6 +65,15 @@ class IMessageSettings(BaseModel):
     allowed_senders: list[str] = Field(default_factory=list)
 
 
+class CronSettings(BaseModel):
+    # Agent-schedulable wake source. Hard caps below bound how much the agent
+    # can spend on self-scheduled wakes; see src/sources/cron.py.
+    enabled: bool = False
+    max_active: int = 8
+    min_delay_seconds: int = 60
+    max_fires_per_day: int = 24
+
+
 class WebChatSettings(BaseModel):
     enabled: bool = False
 
@@ -78,6 +87,7 @@ class InterfacesSettings(BaseModel):
 
 class SourcesSettings(BaseModel):
     imessage: IMessageSettings = IMessageSettings()
+    cron: CronSettings = CronSettings()
 
 
 class DashboardSettings(BaseModel):

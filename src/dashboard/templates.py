@@ -44,7 +44,7 @@ button{padding:.5rem 1rem;cursor:pointer}
 .status{color:#666;font-size:.9rem}
 #demo-banner{background:#ffd;padding:.6rem 1rem;border-bottom:1px solid #cc9;margin:-1rem -1rem 1rem -1rem}
 .disabled-demo{opacity:.5;pointer-events:none}
-#interfaces{display:flex;flex-direction:column;gap:.4rem}
+#interfaces,#sources{display:flex;flex-direction:column;gap:.4rem}
 .iface-row{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;padding:.35rem .5rem;border:1px solid #eee;border-radius:4px}
 .iface-row .iname{font-family:ui-monospace,monospace;min-width:6rem}
 .iface-row .imiss{color:#b00;font-size:.85rem}
@@ -59,8 +59,14 @@ button{padding:.5rem 1rem;cursor:pointer}
 
 <section>
 <h2>Interfaces</h2>
-<p class="status" style="margin:.2rem 0 .6rem">Toggle an interface on to enable it. If it needs secrets you don't have yet, you'll be prompted inline. Restart after changes.</p>
+<p class="status" style="margin:.2rem 0 .6rem">Two-way channels (send + receive). Toggle on to enable. If an interface needs secrets you don't have yet, you'll be prompted inline. Restart after changes.</p>
 <div id="interfaces"></div>
+</section>
+
+<section>
+<h2>Sources</h2>
+<p class="status" style="margin:.2rem 0 .6rem">Receive-only wake inputs (no send path) — external feeds like iMessage and the agent-schedulable cron.</p>
+<div id="sources"></div>
 </section>
 
 <section>
@@ -136,9 +142,11 @@ let _interfaces = [];
 let _baselineEnabled = {};
 
 function renderInterfaces() {
-  const host = document.getElementById('interfaces');
-  if (!host) return;
-  host.innerHTML = '';
+  const ifaceHost = document.getElementById('interfaces');
+  const sourceHost = document.getElementById('sources');
+  if (!ifaceHost || !sourceHost) return;
+  ifaceHost.innerHTML = '';
+  sourceHost.innerHTML = '';
   for (const iface of _interfaces) {
     const row = document.createElement('div');
     row.className = 'iface-row';
@@ -155,6 +163,7 @@ function renderInterfaces() {
       (iface.required_env.length ? `<span class="status" style="font-size:.8rem">needs: ${iface.required_env.join(', ')}</span>` : '') +
       missingHtml +
       pendingHtml;
+    const host = iface.kind === 'sources' ? sourceHost : ifaceHost;
     host.appendChild(row);
   }
   applyRole();

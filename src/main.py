@@ -31,6 +31,7 @@ from lib.agent import AgentType
 from lib.interface import Interface
 from lib.settings import CONFIG_DIR, CONFIG_TOML, SOUL_MD, Settings
 from lib.source import Source, Trigger
+from sources.cron import Cron
 from sources.imessage import IMessage
 from dashboard import DashboardServer
 
@@ -111,6 +112,8 @@ def build_sources(settings: Settings) -> list[Source]:
 
     if sc.imessage.enabled:
         out.append(IMessage(agent_id, sc.imessage))
+    if sc.cron.enabled:
+        out.append(Cron(agent_id, sc.cron))
     return out
 
 
