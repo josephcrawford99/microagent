@@ -44,10 +44,10 @@ allowed_chat_ids = []
 poll_timeout = 30
 
 # Receive-only inputs (no `send` path) live under [sources.*].
-# wake_on_event=false (the default) keeps a source passive: it runs in the
-# background and buffers state, but the agent only sees it when it polls
-# {name}_receive after being woken by something else. Set true to wake on
-# every new event.
+# wake_on_event=false keeps a source passive: it runs in the background and
+# buffers state, but the agent only sees it when it polls {name}_receive
+# after being woken by something else. Set true to wake on every new event.
+# Defaults differ per source — imessage is passive, cron wakes by design.
 [sources.imessage]
 enabled = false
 wake_on_event = false
@@ -57,7 +57,7 @@ db_path = "/mnt/imessage/chat.db"
 # The caps bound how much the agent can spend on self-scheduled wakes.
 [sources.cron]
 enabled = false
-wake_on_event = false
+wake_on_event = true
 max_active = 8
 min_delay_seconds = 60
 max_fires_per_day = 24

@@ -49,12 +49,30 @@ class EmailSettings(BaseModel):
     imap_port: int = 993
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
-    allowed_senders: list[str] = Field(default_factory=list)
+    allowed_senders: list[str] = Field(
+        default_factory=list,
+        json_schema_extra={
+            "ui": "whitelist",
+            "label": "Allowed senders",
+            "placeholder": "alice@example.com",
+            "help": "Email addresses permitted to wake the agent. Empty = no allowlist (every inbound email wakes).",
+            "required_to_enable": False,
+        },
+    )
 
 
 class TelegramSettings(BaseModel):
     enabled: bool = False
-    allowed_chat_ids: list[int] = Field(default_factory=list)
+    allowed_chat_ids: list[int] = Field(
+        default_factory=list,
+        json_schema_extra={
+            "ui": "whitelist",
+            "label": "Allowed chat IDs",
+            "placeholder": "12345678",
+            "help": "Telegram chat IDs permitted to message the agent. Empty = none can.",
+            "required_to_enable": True,
+        },
+    )
     # getUpdates long-poll timeout. 30s keeps traffic near-zero while idle.
     poll_timeout: int = 30
 
@@ -69,7 +87,7 @@ class CronSettings(BaseModel):
     # Agent-schedulable wake source. Hard caps below bound how much the agent
     # can spend on self-scheduled wakes; see src/sources/cron.py.
     enabled: bool = False
-    wake_on_event: bool = False
+    wake_on_event: bool = True
     max_active: int = 8
     min_delay_seconds: int = 60
     max_fires_per_day: int = 24

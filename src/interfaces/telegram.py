@@ -33,6 +33,7 @@ ERROR_BACKOFF_S = 5
 class Telegram(Interface):
     name = "telegram"
     required_env = ["TELEGRAM_BOT_TOKEN"]
+    settings_cls = TelegramSettings
 
     def __init__(
         self, agent_id: str, settings: TelegramSettings, token: str

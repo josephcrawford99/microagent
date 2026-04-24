@@ -16,6 +16,7 @@ log = logging.getLogger("microagent.socket")
 
 class Socket(Interface):
     name = "socket"
+    settings_cls = SocketSettings
 
     def __init__(self, agent_id: str, settings: SocketSettings) -> None:
         super().__init__(agent_id)

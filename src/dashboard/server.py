@@ -31,6 +31,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
 import tomli_w
+from pydantic import TypeAdapter, ValidationError
 
 from interfaces import INTERFACES
 from lib.settings import CONFIG_ENV, CONFIG_TOML, Settings
@@ -180,6 +181,30 @@ def _registry_kind(name: str) -> str | None:
     return None
 
 
+def _editable_fields(cls) -> list[dict[str, Any]]:
+    """Introspect cls.settings_cls and return the ui-tagged fields. Today
+    only `ui: "whitelist"` is recognized; extend the schema-extra contract
+    here when adding new editor kinds (string, secret, …)."""
+    settings_cls = getattr(cls, "settings_cls", None)
+    if settings_cls is None:
+        return []
+    out: list[dict[str, Any]] = []
+    for fname, finfo in settings_cls.model_fields.items():
+        extra = finfo.json_schema_extra or {}
+        if not isinstance(extra, dict):
+            continue
+        if extra.get("ui") != "whitelist":
+            continue
+        out.append({
+            "name": fname,
+            "label": extra.get("label", fname),
+            "placeholder": extra.get("placeholder", ""),
+            "help": extra.get("help", ""),
+            "required_to_enable": bool(extra.get("required_to_enable", False)),
+        })
+    return out
+
+
 def _interfaces_status(env: dict[str, str], config_text: str) -> list[dict[str, Any]]:
     """One row per discovered wake-input (Interface or Source): name, kind,
     enabled (from config.toml), required_env, and which of those are
@@ -207,10 +232,24 @@ def _interfaces_status(env: dict[str, str], config_text: str) -> list[dict[str, 
             "missing_env": missing,
         }
         if kind == "sources":
-            # Default matches the settings model (False) when the field is
-            # absent from config.toml.
-            out["wake_on_event"] = bool(section.get("wake_on_event", False)) \
-                if isinstance(section, dict) else False
+            # Fallback mirrors the source's settings-model default so the UI
+            # matches code behaviour when the field is absent from config.toml.
+            default_wake = False
+            if cls.settings_cls is not None:
+                try:
+                    default_wake = bool(cls.settings_cls().wake_on_event)
+                except Exception:
+                    default_wake = False
+            out["wake_on_event"] = bool(section.get("wake_on_event", default_wake)) \
+                if isinstance(section, dict) else default_wake
+        editable = _editable_fields(cls)
+        if editable:
+            out["editable_fields"] = editable
+            values: dict[str, Any] = {}
+            for f in editable:
+                v = section.get(f["name"]) if isinstance(section, dict) else None
+                values[f["name"]] = v if isinstance(v, list) else []
+            out["field_values"] = values
         return out
 
     out: list[dict[str, Any]] = []
@@ -233,6 +272,27 @@ def _toggle_source_wake(name: str, wake: bool) -> None:
     if _registry_kind(name) != "sources":
         raise ValueError(f"wake toggle only valid for sources: {name}")
     _set_input_field(name, "wake_on_event", bool(wake))
+
+
+def _set_editable_field(name: str, field: str, value: Any) -> Any:
+    """Validate + coerce + write a ui-tagged settings field. Looks up the
+    Input class, confirms the field is in its editable schema (anti-clobber),
+    runs the value through pydantic's TypeAdapter for the field's annotation,
+    and persists the coerced value to config.toml."""
+    kind = _registry_kind(name)
+    if kind is None:
+        raise ValueError(f"unknown input: {name}")
+    cls = INTERFACES[name] if kind == "interfaces" else SOURCES[name]
+    schema = {f["name"]: f for f in _editable_fields(cls)}
+    if field not in schema:
+        raise ValueError(f"field {field!r} is not editable on {name}")
+    finfo = cls.settings_cls.model_fields[field]
+    try:
+        coerced = TypeAdapter(finfo.annotation).validate_python(value)
+    except ValidationError as e:
+        raise ValueError(str(e)) from None
+    _set_input_field(name, field, coerced)
+    return coerced
 
 
 def _set_input_field(name: str, field: str, value: Any) -> None:
@@ -477,6 +537,20 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True})
             except Exception as e:
                 log.exception("source wake toggle failed")
+                self._json(400, {"error": str(e)})
+            return
+        if path == "/api/interface/field":
+            try:
+                payload = json.loads(body)
+                name = payload.get("name", "")
+                field = payload.get("field", "")
+                value = payload.get("value", [])
+                coerced = _set_editable_field(name, field, value)
+                self._json(200, {"ok": True, "value": coerced})
+            except ValueError as e:
+                self._json(400, {"error": str(e)})
+            except Exception as e:
+                log.exception("editable field write failed")
                 self._json(400, {"error": str(e)})
             return
         if path == "/api/restart":

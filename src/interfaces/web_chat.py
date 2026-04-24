@@ -18,6 +18,7 @@ log = logging.getLogger("microagent.web_chat")
 
 class WebChat(Interface):
     name = "web_chat"
+    settings_cls = WebChatSettings
 
     def __init__(self, agent_id: str, settings: WebChatSettings) -> None:
         super().__init__(agent_id)

@@ -26,6 +26,7 @@ DRAIN_TIMEOUT_S = 120
 
 class IMessage(Source):
     name = "imessage"
+    settings_cls = IMessageSettings
 
     def __init__(self, agent_id: str, settings: IMessageSettings) -> None:
         super().__init__(agent_id)

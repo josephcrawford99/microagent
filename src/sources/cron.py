@@ -38,6 +38,7 @@ TIME_OF_DAY_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
 class Cron(Source):
     name = "cron"
+    settings_cls = CronSettings
 
     def __init__(self, agent_id: str, settings: CronSettings) -> None:
         super().__init__(agent_id)

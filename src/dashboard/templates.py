@@ -51,6 +51,14 @@ button{padding:.5rem 1rem;cursor:pointer}
 .iface-prompt{display:flex;flex-basis:100%;gap:.4rem;align-items:center;margin-top:.3rem}
 .iface-prompt input{flex:1 1 auto;padding:.4rem;font-family:ui-monospace,monospace;border:1px solid #ccc;border-radius:4px}
 .iface-prompt label{font-family:ui-monospace,monospace;font-size:.85rem;min-width:9rem}
+.iface-edit{background:none;border:1px solid #ddd;border-radius:4px;padding:.2rem .5rem;font-size:.8rem;color:#444;cursor:pointer}
+.iface-edit:hover{background:#f4f4f4}
+.iface-fields{display:flex;flex-basis:100%;flex-direction:column;gap:.5rem;margin-top:.4rem;padding:.5rem .65rem;background:#fafafa;border:1px solid #eee;border-radius:4px}
+.iface-fields .ifield-label{font-size:.85rem;font-weight:600;font-family:ui-monospace,monospace}
+.iface-fields .ifield-help{font-size:.78rem;color:#666;margin:-.15rem 0 .15rem}
+.iface-fields textarea{width:100%;min-height:4rem;font-family:ui-monospace,monospace;font-size:.85rem;padding:.35rem;border:1px solid #ccc;border-radius:4px;resize:vertical;box-sizing:border-box}
+.iface-fields .ifield-row{display:flex;gap:.4rem;align-items:center}
+.iface-fields .ifield-err{color:#b00;font-size:.8rem}
 </style></head>
 <body>
 <div id="demo-banner" hidden><b>Demo mode</b> — all values are empty and changes are not saved.</div>
@@ -136,11 +144,28 @@ function applyRole() {
 let _env = {};
 let _interfaces = [];
 
-// Baseline = enabled/wake-map at page load. The running process booted
-// from config.toml, so this matches what it's actually running. A row
-// shows "restart to apply" iff current != baseline; toggling back clears it.
+// Baseline = enabled/wake/field-values map at page load. The running
+// process booted from config.toml, so this matches what it's actually
+// running. A row shows "restart to apply" iff current != baseline;
+// toggling back clears it. Field values are JSON-stringified for cheap
+// equality comparison on lists.
 let _baselineEnabled = {};
 let _baselineWake = {};
+let _baselineFields = {};
+
+function _fieldsBaselineDiffers(iface) {
+  const base = _baselineFields[iface.name];
+  const cur = iface.field_values || {};
+  if (!base) return false;
+  for (const k of Object.keys(base)) {
+    if (base[k] !== JSON.stringify(cur[k] || [])) return true;
+  }
+  return false;
+}
+
+function _esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 
 function renderInterfaces() {
   const ifaceHost = document.getElementById('interfaces');
@@ -158,17 +183,22 @@ function renderInterfaces() {
     const pendingEnabled = _baselineEnabled[iface.name] !== iface.enabled;
     const pendingWake = iface.kind === 'sources'
       && _baselineWake[iface.name] !== iface.wake_on_event;
-    const pendingHtml = (pendingEnabled || pendingWake)
+    const pendingFields = _fieldsBaselineDiffers(iface);
+    const pendingHtml = (pendingEnabled || pendingWake || pendingFields)
       ? '<span class="imiss" style="color:#a60">restart to apply</span>' : '';
     const wakeHtml = iface.kind === 'sources'
       ? `<label class="status" style="font-size:.8rem;display:inline-flex;align-items:center;gap:.2rem">` +
         `<input type="checkbox" ${iface.wake_on_event?'checked':''} data-owner-only onchange="onWakeToggle('${iface.name}', this)">` +
         `wakes</label>`
       : '';
+    const editBtnHtml = (iface.editable_fields && iface.editable_fields.length)
+      ? `<button type="button" class="iface-edit" data-owner-only onclick="toggleFieldsPanel('${iface.name}')">edit lists</button>`
+      : '';
     row.innerHTML =
       `<input type="checkbox" ${iface.enabled?'checked':''} data-owner-only onchange="onToggle('${iface.name}', this)">` +
       `<span class="iname">${iface.name}</span>` +
       wakeHtml +
+      editBtnHtml +
       (iface.required_env.length ? `<span class="status" style="font-size:.8rem">needs: ${iface.required_env.join(', ')}</span>` : '') +
       missingHtml +
       pendingHtml;
@@ -176,6 +206,95 @@ function renderInterfaces() {
     host.appendChild(row);
   }
   applyRole();
+}
+
+function _renderFieldsPanel(iface, row, opts) {
+  // opts: {fields: [field-schemas], blockingForEnable: bool}
+  // Removes any existing panel/prompt below the row, then renders one
+  // <textarea> per field. blockingForEnable swaps the save-button copy and
+  // wires post-save retoggle of the enable checkbox.
+  row.querySelectorAll('.iface-fields, .iface-prompt').forEach(e => e.remove());
+  const fields = opts.fields;
+  const panel = document.createElement('div');
+  panel.className = 'iface-fields';
+  const saveLabel = opts.blockingForEnable ? 'save & enable' : 'save';
+  const inputs = {};
+  let html = '';
+  for (const f of fields) {
+    const cur = (iface.field_values && iface.field_values[f.name]) || [];
+    const text = cur.map(v => String(v)).join('\n');
+    html += `<div>` +
+      `<div class="ifield-label">${_esc(f.label)}</div>` +
+      (f.help ? `<div class="ifield-help">${_esc(f.help)}</div>` : '') +
+      `<textarea data-field="${_esc(f.name)}" placeholder="${_esc(f.placeholder)}\none per line">${_esc(text)}</textarea>` +
+      `<div class="ifield-err" data-err-for="${_esc(f.name)}" hidden></div>` +
+      `</div>`;
+  }
+  html += `<div class="ifield-row">` +
+    `<button type="button" class="ifield-save">${saveLabel}</button>` +
+    `<button type="button" class="ifield-cancel">cancel</button>` +
+    `</div>`;
+  panel.innerHTML = html;
+  row.appendChild(panel);
+  panel.querySelectorAll('textarea').forEach(t => { inputs[t.dataset.field] = t; });
+  panel.querySelector('.ifield-cancel').onclick = () => {
+    panel.remove();
+    if (opts.blockingForEnable) {
+      const cb = row.querySelector('input[type=checkbox]');
+      if (cb) cb.checked = false;
+    }
+  };
+  panel.querySelector('.ifield-save').onclick = async () => {
+    const btn = panel.querySelector('.ifield-save');
+    btn.disabled = true;
+    let allOk = true;
+    for (const f of fields) {
+      const ta = inputs[f.name];
+      const items = ta.value.split('\n').map(s => s.trim()).filter(s => s.length);
+      const errEl = panel.querySelector(`[data-err-for="${f.name}"]`);
+      errEl.hidden = true;
+      const r = await fetch('/api/interface/field', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({name: iface.name, field: f.name, value: items}),
+      });
+      if (!r.ok) {
+        let msg = 'failed';
+        try { msg = (await r.json()).error || msg; } catch (_) {}
+        errEl.textContent = msg;
+        errEl.hidden = false;
+        allOk = false;
+        continue;
+      }
+      const data = await r.json();
+      iface.field_values = iface.field_values || {};
+      iface.field_values[f.name] = data.value || items;
+    }
+    if (!allOk) { btn.disabled = false; return; }
+    if (opts.blockingForEnable) {
+      const r2 = await fetch('/api/interface/toggle', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({name: iface.name, enabled: true}),
+      });
+      if (!r2.ok) { btn.disabled = false; return; }
+      iface.enabled = true;
+    }
+    renderInterfaces();
+  };
+  panel.querySelector('textarea').focus();
+}
+
+function toggleFieldsPanel(name) {
+  if (ROLE === 'demo') return;
+  const iface = _interfaces.find(i => i.name === name);
+  if (!iface) return;
+  const row = document.querySelector(`.iface-row[data-name="${name}"]`);
+  if (!row) return;
+  if (row.querySelector('.iface-fields')) {
+    row.querySelectorAll('.iface-fields').forEach(e => e.remove());
+    return;
+  }
+  _renderFieldsPanel(iface, row, {fields: iface.editable_fields, blockingForEnable: false});
 }
 
 async function onWakeToggle(name, cb) {
@@ -191,7 +310,7 @@ async function onToggle(name, cb) {
   if (ROLE === 'demo') { cb.checked = !cb.checked; return; }
   const iface = _interfaces.find(i => i.name === name);
   const row = cb.closest('.iface-row');
-  row.querySelectorAll('.iface-prompt').forEach(e => e.remove());
+  row.querySelectorAll('.iface-prompt, .iface-fields').forEach(e => e.remove());
   if (cb.checked) {
     const missing = iface.required_env.filter(k => !_env[k]);
     if (missing.length) {
@@ -221,6 +340,16 @@ async function onToggle(name, cb) {
         row.appendChild(p);
       }
       row.querySelector('.iface-prompt input').focus();
+      return;
+    }
+    const blockingFields = (iface.editable_fields || []).filter(f => {
+      if (!f.required_to_enable) return false;
+      const cur = (iface.field_values && iface.field_values[f.name]) || [];
+      return cur.length === 0;
+    });
+    if (blockingFields.length) {
+      cb.checked = false;
+      _renderFieldsPanel(iface, row, {fields: blockingFields, blockingForEnable: true});
       return;
     }
   }
@@ -410,6 +539,15 @@ async function bootstrap() {
   _interfaces = d.interfaces || [];
   _baselineEnabled = Object.fromEntries(_interfaces.map(i => [i.name, i.enabled]));
   _baselineWake = Object.fromEntries(_interfaces.filter(i => i.kind === 'sources').map(i => [i.name, !!i.wake_on_event]));
+  _baselineFields = {};
+  for (const i of _interfaces) {
+    if (!i.editable_fields || !i.editable_fields.length) continue;
+    const m = {};
+    for (const f of i.editable_fields) {
+      m[f.name] = JSON.stringify((i.field_values && i.field_values[f.name]) || []);
+    }
+    _baselineFields[i.name] = m;
+  }
   document.getElementById('config').value = d.config_toml || '';
   renderEnv(_env);
   renderInterfaces();

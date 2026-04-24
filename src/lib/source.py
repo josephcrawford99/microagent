@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, ClassVar, Optional
 
 from claude_agent_sdk import SdkMcpTool, tool
+from pydantic import BaseModel
 
 log = logging.getLogger("microagent.source")
 
@@ -61,6 +62,9 @@ class Source:
     name: str
     message_class: type[Message] = Message
     required_env: ClassVar[list[str]] = []
+    # Pydantic settings model for this Input. The dashboard introspects it
+    # to discover ui-tagged fields (whitelists, etc.) and render editors.
+    settings_cls: ClassVar[Optional[type[BaseModel]]] = None
     # Interfaces inherit Source and must always wake; source subclasses
     # override from their settings (defaulting False = agent-polled only).
     wake_on_event: bool = True
