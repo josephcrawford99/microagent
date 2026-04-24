@@ -1,9 +1,9 @@
 """Standalone HTTP control panel.
 
 Separate from the Interface abstraction — the dashboard is not a channel the
-agent talks through. It reads typed Settings, writes /config/config.toml
-wholesale via tomli-w, rotates /config/.env, surfaces agent usage stats,
-and proxies chat to the WebChat interface (if that interface is enabled).
+agent talks through. It delegates all config I/O to `lib.settings` (imported
+as `cfg`), surfaces agent usage stats, and proxies chat to the WebChat
+interface when enabled.
 
 Auth model:
   - Direct LAN hits (no CF-Connecting-IP header) are trusted as "owner".
@@ -30,12 +30,8 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
-import tomli_w
-from pydantic import TypeAdapter, ValidationError
-
-from interfaces import INTERFACES
-from lib.settings import CONFIG_ENV, CONFIG_TOML, Settings
-from sources import SOURCES
+from lib import settings as cfg
+from lib.settings import Settings
 
 from .templates import LOGIN_HTML, PAGE_HTML
 
@@ -43,8 +39,6 @@ log = logging.getLogger("microagent.dashboard")
 
 COOKIE_NAME = "dash_token"
 SPACE_DIR = "/space"
-# Keys matching any of these substrings render as type=password inputs.
-SECRET_HINTS = ("TOKEN", "PASSWORD", "SECRET", "KEY", "API")
 
 
 class DashboardServer:
@@ -100,219 +94,6 @@ def _get_cookie(headers, name: str) -> str:
         return jar[name].value if name in jar else ""
     except Exception:
         return ""
-
-
-def _is_secret(key: str) -> bool:
-    return any(h in key.upper() for h in SECRET_HINTS)
-
-
-# --- file helpers ----------------------------------------------------------
-
-
-def _read_env() -> dict[str, str]:
-    out: dict[str, str] = {}
-    try:
-        with CONFIG_ENV.open() as f:
-            for line in f:
-                s = line.strip()
-                if not s or s.startswith("#") or "=" not in s:
-                    continue
-                k, v = s.split("=", 1)
-                out[k.strip()] = v.strip()
-    except FileNotFoundError:
-        pass
-    return out
-
-
-def _write_env(new: dict[str, str]) -> None:
-    """Preserve comments / order of existing keys; append new ones at the end."""
-    try:
-        with CONFIG_ENV.open() as f:
-            lines = f.readlines()
-    except FileNotFoundError:
-        lines = []
-    remaining = dict(new)
-    out: list[str] = []
-    for line in lines:
-        s = line.lstrip()
-        if s.startswith("#") or "=" not in s:
-            out.append(line)
-            continue
-        k = s.split("=", 1)[0].strip()
-        if k in remaining:
-            out.append(f"{k}={remaining.pop(k)}\n")
-        # keys omitted from `new` are dropped (UI delete)
-    for k, v in remaining.items():
-        out.append(f"{k}={v}\n")
-    CONFIG_ENV.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CONFIG_ENV.with_suffix(CONFIG_ENV.suffix + ".tmp")
-    with tmp.open("w") as f:
-        f.writelines(out)
-    os.replace(tmp, CONFIG_ENV)
-
-
-def _read_config_text() -> str:
-    try:
-        return CONFIG_TOML.read_text()
-    except FileNotFoundError:
-        return ""
-
-
-def _write_config_text(text: str) -> None:
-    """Validate by parsing, then round-trip through tomli_w so the file
-    stays well-formed and canonically formatted."""
-    import tomllib
-
-    data = tomllib.loads(text)  # raises TOMLDecodeError on bad input
-    CONFIG_TOML.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CONFIG_TOML.with_suffix(CONFIG_TOML.suffix + ".tmp")
-    with tmp.open("wb") as f:
-        tomli_w.dump(data, f)
-    os.replace(tmp, CONFIG_TOML)
-
-
-def _registry_kind(name: str) -> str | None:
-    """Return 'interfaces' or 'sources' depending on which registry owns the
-    given input name. None if unknown."""
-    if name in INTERFACES:
-        return "interfaces"
-    if name in SOURCES:
-        return "sources"
-    return None
-
-
-def _editable_fields(cls) -> list[dict[str, Any]]:
-    """Introspect cls.settings_cls and return the ui-tagged fields. Today
-    only `ui: "whitelist"` is recognized; extend the schema-extra contract
-    here when adding new editor kinds (string, secret, …)."""
-    settings_cls = getattr(cls, "settings_cls", None)
-    if settings_cls is None:
-        return []
-    out: list[dict[str, Any]] = []
-    for fname, finfo in settings_cls.model_fields.items():
-        extra = finfo.json_schema_extra or {}
-        if not isinstance(extra, dict):
-            continue
-        if extra.get("ui") != "whitelist":
-            continue
-        out.append({
-            "name": fname,
-            "label": extra.get("label", fname),
-            "placeholder": extra.get("placeholder", ""),
-            "help": extra.get("help", ""),
-            "required_to_enable": bool(extra.get("required_to_enable", False)),
-        })
-    return out
-
-
-def _interfaces_status(env: dict[str, str], config_text: str) -> list[dict[str, Any]]:
-    """One row per discovered wake-input (Interface or Source): name, kind,
-    enabled (from config.toml), required_env, and which of those are
-    currently missing from .env."""
-    import tomllib
-
-    try:
-        parsed = tomllib.loads(config_text)
-    except Exception:
-        parsed = {}
-    interfaces_section = parsed.get("interfaces", {}) if isinstance(parsed, dict) else {}
-    sources_section = parsed.get("sources", {}) if isinstance(parsed, dict) else {}
-
-    def row(kind: str, name: str, cls) -> dict[str, Any]:
-        section_root = interfaces_section if kind == "interfaces" else sources_section
-        section = section_root.get(name, {}) if isinstance(section_root, dict) else {}
-        enabled = bool(section.get("enabled", False)) if isinstance(section, dict) else False
-        required = list(getattr(cls, "required_env", []) or [])
-        missing = [k for k in required if not env.get(k)]
-        out: dict[str, Any] = {
-            "name": name,
-            "kind": kind,
-            "enabled": enabled,
-            "required_env": required,
-            "missing_env": missing,
-        }
-        if kind == "sources":
-            # Fallback mirrors the source's settings-model default so the UI
-            # matches code behaviour when the field is absent from config.toml.
-            default_wake = False
-            if cls.settings_cls is not None:
-                try:
-                    default_wake = bool(cls.settings_cls().wake_on_event)
-                except Exception:
-                    default_wake = False
-            out["wake_on_event"] = bool(section.get("wake_on_event", default_wake)) \
-                if isinstance(section, dict) else default_wake
-        editable = _editable_fields(cls)
-        if editable:
-            out["editable_fields"] = editable
-            values: dict[str, Any] = {}
-            for f in editable:
-                v = section.get(f["name"]) if isinstance(section, dict) else None
-                values[f["name"]] = v if isinstance(v, list) else []
-            out["field_values"] = values
-        return out
-
-    out: list[dict[str, Any]] = []
-    for name in sorted(INTERFACES):
-        out.append(row("interfaces", name, INTERFACES[name]))
-    for name in sorted(SOURCES):
-        out.append(row("sources", name, SOURCES[name]))
-    return out
-
-
-def _toggle_interface(name: str, enabled: bool) -> None:
-    """Flip `[<kind>.<name>].enabled` in config.toml where `<kind>` is
-    'interfaces' or 'sources' based on the registry. Preserves other fields."""
-    _set_input_field(name, "enabled", bool(enabled))
-
-
-def _toggle_source_wake(name: str, wake: bool) -> None:
-    """Flip `[sources.<name>].wake_on_event`. Sources only — interfaces
-    always wake."""
-    if _registry_kind(name) != "sources":
-        raise ValueError(f"wake toggle only valid for sources: {name}")
-    _set_input_field(name, "wake_on_event", bool(wake))
-
-
-def _set_editable_field(name: str, field: str, value: Any) -> Any:
-    """Validate + coerce + write a ui-tagged settings field. Looks up the
-    Input class, confirms the field is in its editable schema (anti-clobber),
-    runs the value through pydantic's TypeAdapter for the field's annotation,
-    and persists the coerced value to config.toml."""
-    kind = _registry_kind(name)
-    if kind is None:
-        raise ValueError(f"unknown input: {name}")
-    cls = INTERFACES[name] if kind == "interfaces" else SOURCES[name]
-    schema = {f["name"]: f for f in _editable_fields(cls)}
-    if field not in schema:
-        raise ValueError(f"field {field!r} is not editable on {name}")
-    finfo = cls.settings_cls.model_fields[field]
-    try:
-        coerced = TypeAdapter(finfo.annotation).validate_python(value)
-    except ValidationError as e:
-        raise ValueError(str(e)) from None
-    _set_input_field(name, field, coerced)
-    return coerced
-
-
-def _set_input_field(name: str, field: str, value: Any) -> None:
-    import tomllib
-
-    kind = _registry_kind(name)
-    if kind is None:
-        raise ValueError(f"unknown input: {name}")
-    try:
-        data = tomllib.loads(CONFIG_TOML.read_text())
-    except FileNotFoundError:
-        data = {}
-    root = data.setdefault(kind, {})
-    section = root.setdefault(name, {})
-    section[field] = value
-    CONFIG_TOML.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CONFIG_TOML.with_suffix(CONFIG_TOML.suffix + ".tmp")
-    with tmp.open("wb") as f:
-        tomli_w.dump(data, f)
-    os.replace(tmp, CONFIG_TOML)
 
 
 def _resolve_space(url_path: str) -> Optional[str]:
@@ -503,7 +284,7 @@ class _Handler(BaseHTTPRequestHandler):
                     if not k:
                         continue
                     new[k] = row.get("value", "")
-                _write_env(new)
+                cfg.write_env(new)
                 self._json(200, {"ok": True})
             except Exception as e:
                 log.exception("env save failed")
@@ -511,7 +292,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/config":
             try:
-                _write_config_text(body.decode("utf-8"))
+                cfg.write_toml_text(body.decode("utf-8"))
                 self._json(200, {"ok": True})
             except Exception as e:
                 log.exception("config save failed")
@@ -520,9 +301,7 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/interface/toggle":
             try:
                 payload = json.loads(body)
-                name = payload.get("name", "")
-                enabled = bool(payload.get("enabled", False))
-                _toggle_interface(name, enabled)
+                cfg.toggle(payload.get("name", ""), bool(payload.get("enabled", False)))
                 self._json(200, {"ok": True})
             except Exception as e:
                 log.exception("interface toggle failed")
@@ -531,9 +310,7 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/source/wake_toggle":
             try:
                 payload = json.loads(body)
-                name = payload.get("name", "")
-                enabled = bool(payload.get("enabled", False))
-                _toggle_source_wake(name, enabled)
+                cfg.set_wake(payload.get("name", ""), bool(payload.get("enabled", False)))
                 self._json(200, {"ok": True})
             except Exception as e:
                 log.exception("source wake toggle failed")
@@ -542,10 +319,11 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/interface/field":
             try:
                 payload = json.loads(body)
-                name = payload.get("name", "")
-                field = payload.get("field", "")
-                value = payload.get("value", [])
-                coerced = _set_editable_field(name, field, value)
+                coerced = cfg.set_field(
+                    payload.get("name", ""),
+                    payload.get("field", ""),
+                    payload.get("value", []),
+                )
                 self._json(200, {"ok": True, "value": coerced})
             except ValueError as e:
                 self._json(400, {"error": str(e)})
@@ -596,13 +374,11 @@ class _Handler(BaseHTTPRequestHandler):
                 "public_url": self.dash.public_url,
             })
             return
-        env = _read_env()
-        config_text = _read_config_text()
         self._json(200, {
             "role": "owner",
-            "env": env,
-            "config_toml": config_text,
-            "interfaces": _interfaces_status(env, config_text),
+            "env": cfg.read_env(),
+            "config_toml": cfg.read_toml_text(),
+            "interfaces": cfg.inputs_status(),
             "usage": self.dash.agent.get_usage(),
             "public_url": self.dash.public_url,
         })
