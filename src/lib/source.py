@@ -23,7 +23,7 @@ from typing import Any, ClassVar, Optional
 from claude_agent_sdk import SdkMcpTool, tool
 from pydantic import BaseModel
 
-log = logging.getLogger("microagent.source")
+log = logging.getLogger(__name__)
 
 ToolArgs = dict[str, Any]
 ToolResult = dict[str, Any]

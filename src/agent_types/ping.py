@@ -10,7 +10,7 @@ import logging
 
 from lib.agent import AgentType
 
-log = logging.getLogger("microagent.ping")
+log = logging.getLogger(__name__)
 
 
 class Ping(AgentType):

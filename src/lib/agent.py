@@ -11,13 +11,14 @@ dashboard edits take effect on the next wake without a restart.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from lib.settings import Settings
     from lib.source import Source, Trigger
 
-log = logging.getLogger("microagent.agent")
+log = logging.getLogger(__name__)
 
 
 class AgentType:
@@ -28,6 +29,7 @@ class AgentType:
     ) -> None:
         self.agent_id = agent_id
         self.settings = settings
+        (Path("/state") / agent_id).mkdir(parents=True, exist_ok=True)
         # Named `interfaces` for back-compat — the list now holds any Source
         # (send-capable Interface or receive-only Source subclass).
         self.interfaces = interfaces

@@ -4,13 +4,13 @@
 # The dashboard writes this file directly; a human can also edit by hand.
 # Changes take effect on next restart.
 
-agent_type = "claude"
-agent_id = "primary"
-
 [user]
 name = ""
 
-[agents.claude]
+# Agents are keyed by id. The daemon currently runs the first one listed;
+# extra [agents.*] sections are parsed but ignored.
+[agents.primary]
+agent_type = "claude"
 rotation_time = "03:00"
 
 [dashboard]

@@ -29,7 +29,7 @@ from lib.settings import CronSettings
 from lib.source import Message, Source, ToolArgs, ToolResult, _error
 from lib.state import ComponentState
 
-log = logging.getLogger("microagent.cron")
+log = logging.getLogger(__name__)
 
 STALE_CUTOFF_HOURS = 24
 IDLE_SLEEP_S = 3600

@@ -2,8 +2,8 @@
 
 Separate from the Interface abstraction — the dashboard is not a channel the
 agent talks through. It delegates all config I/O to `lib.settings` (imported
-as `cfg`), surfaces agent usage stats, and proxies chat to the WebChat
-interface when enabled.
+as `cfg`), surfaces agent usage stats, and proxies chat to whichever
+interface on the agent satisfies the `ChatView` protocol.
 
 Auth model:
   - Direct LAN hits (no CF-Connecting-IP header) are trusted as "owner".
@@ -30,12 +30,13 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
+from interfaces.web_chat import ChatView
 from lib import settings as cfg
 from lib.settings import Settings
 
 from .templates import LOGIN_HTML, PAGE_HTML
 
-log = logging.getLogger("microagent.dashboard")
+log = logging.getLogger(__name__)
 
 COOKIE_NAME = "dash_token"
 SPACE_DIR = "/space"
@@ -48,11 +49,12 @@ class DashboardServer:
         self,
         settings: Settings,
         agent,  # AgentType — avoids a cycle-y import
-        web_chat=None,  # Optional[WebChat]
     ) -> None:
         self.settings = settings
         self.agent = agent
-        self.web_chat = web_chat
+        self.chat_view: Optional[ChatView] = next(
+            (i for i in agent.interfaces if isinstance(i, ChatView)), None
+        )
         self.owner_token = settings.dashboard_token.get_secret_value()
         self.demo_token = settings.dashboard_demo_token.get_secret_value()
         self.public_url = settings.dashboard.public_url
@@ -351,10 +353,10 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/chat/send":
             try:
                 payload = json.loads(body)
-                if self.dash.web_chat is None:
-                    self._json(400, {"error": "web_chat interface not enabled"})
+                if self.dash.chat_view is None:
+                    self._json(400, {"error": "chat view not available"})
                     return
-                self.dash.web_chat.submit(payload.get("body", ""))
+                self.dash.chat_view.submit(payload.get("body", ""))
                 self._json(200, {"ok": True})
             except Exception as e:
                 self._json(400, {"error": str(e)})
@@ -384,14 +386,14 @@ class _Handler(BaseHTTPRequestHandler):
         })
 
     def _chat_poll(self, role: str) -> None:
-        if role == "demo" or self.dash.web_chat is None:
+        if role == "demo" or self.dash.chat_view is None:
             self._json(200, {"messages": [], "latest": 0, "pending": {"note": None, "id": 0}})
             return
         try:
             after = int(parse_qs(urlparse(self.path).query).get("after", ["0"])[0])
         except ValueError:
             after = 0
-        self._json(200, self.dash.web_chat.get_log(after))
+        self._json(200, self.dash.chat_view.get_log(after))
 
     def _serve_space(self, path: str) -> None:
         if path == "/space":

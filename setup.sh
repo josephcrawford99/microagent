@@ -15,8 +15,8 @@ REPO="$(cd "$(dirname "$0")" && pwd)"
 
 mkdir -p "$CONFIG_DIR"
 
-[ -f "$CONFIG_DIR/config.toml" ] || cp "$REPO/src/examples/config.example.toml" "$CONFIG_DIR/config.toml"
-[ -f "$CONFIG_DIR/soul.md"     ] || cp "$REPO/src/examples/soul.example.md"     "$CONFIG_DIR/soul.md"
+[ -f "$CONFIG_DIR/config.toml" ] || cp "$REPO/src/defaults/config.default.toml" "$CONFIG_DIR/config.toml"
+[ -f "$CONFIG_DIR/soul.md"     ] || cp "$REPO/src/defaults/soul.default.md"     "$CONFIG_DIR/soul.md"
 
 if [ ! -f "$CONFIG_DIR/.env" ]; then
   read -rp "CLAUDE_CODE_OAUTH_TOKEN: " TOKEN

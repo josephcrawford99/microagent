@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
-log = logging.getLogger("microagent.state")
+log = logging.getLogger(__name__)
 
 STATE_ROOT = Path("/state")
 

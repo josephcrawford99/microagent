@@ -19,7 +19,10 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from lib.source import Source
 
 import tomli_w
 from pydantic import BaseModel, Field, SecretStr, TypeAdapter, ValidationError  # noqa: F401
@@ -122,13 +125,15 @@ class DashboardSettings(BaseModel):
     public_url: str = ""
 
 
-class ClaudeAgentSettings(BaseModel):
+class AgentConfig(BaseModel):
+    """One [agents.<id>] section. `agent_type` selects the runtime; everything
+    else is per-type config passed through verbatim."""
+
+    model_config = {"extra": "allow"}
+
+    agent_type: str
     rotation_time: str = "03:00"
     cli_settings: dict[str, Any] = Field(default_factory=dict)
-
-
-class AgentsSettings(BaseModel):
-    claude: ClaudeAgentSettings = ClaudeAgentSettings()
 
 
 # --- top-level Settings -----------------------------------------------------
@@ -144,16 +149,15 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Meta
-    agent_type: str = "claude"
-    agent_id: str = "primary"
-
     # Non-secret, from TOML
     user: UserSettings = UserSettings()
     interfaces: InterfacesSettings = InterfacesSettings()
     sources: SourcesSettings = SourcesSettings()
     dashboard: DashboardSettings = DashboardSettings()
-    agents: AgentsSettings = AgentsSettings()
+    # Keyed by agent id. The daemon runs the first entry.
+    agents: dict[str, AgentConfig] = Field(
+        default_factory=lambda: {"primary": AgentConfig(agent_type="claude")}
+    )
 
     # Secrets, from .env (flat top-level bind to upper-case env var names)
     email_password: SecretStr = SecretStr("")
@@ -179,6 +183,47 @@ class Settings(BaseSettings):
             TomlConfigSettingsSource(settings_cls),
             file_secret_settings,
         )
+
+    def env_secrets(self) -> dict[str, str]:
+        """{ENV_VAR_NAME: value} for every SecretStr field on Settings, keyed
+        by upper-case field name. Sole caller is main.py, which resolves each
+        Input's required_env into constructor kwargs. Dashboard secrets
+        (dashboard_token, dashboard_demo_token) appear here too but no Input
+        claims them — dashboard code reads those directly off Settings."""
+        out: dict[str, str] = {}
+        for name, value in self:
+            if isinstance(value, SecretStr):
+                out[name.upper()] = value.get_secret_value()
+        return out
+
+
+def enabled_sources(settings: "Settings") -> list["Source"]:
+    """Instantiate every enabled Interface and Source from their registries.
+    Interface is a Source subclass, so main combines them into one input list.
+    Missing env vars bind to empty strings — the dashboard surfaces those as
+    `missing_env` separately, and the Input itself will fail loudly on connect.
+
+    Sources need an agent_id for their per-agent state paths — we use the first
+    [agents.*] id, matching the daemon's single-agent runtime."""
+    from interfaces import INTERFACES
+    from sources import SOURCES
+
+    if not settings.agents:
+        raise RuntimeError("no [agents.*] section in config.toml")
+    agent_id = next(iter(settings.agents))
+    env = settings.env_secrets()
+    out: list[Source] = []
+    for registry, section in (
+        (INTERFACES, settings.interfaces),
+        (SOURCES, settings.sources),
+    ):
+        for name, cls in registry.items():
+            cfg = getattr(section, name)
+            if not cfg.enabled:
+                continue
+            kwargs = {k.lower(): env.get(k, "") for k in cls.required_env}
+            out.append(cls(agent_id, cfg, **kwargs))
+    return out
 
 
 def load_soul() -> str:

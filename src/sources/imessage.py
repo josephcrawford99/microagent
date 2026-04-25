@@ -18,7 +18,7 @@ from lib.settings import IMessageSettings
 from lib.source import Message, Source
 from lib.state import ComponentState
 
-log = logging.getLogger("microagent.imessage")
+log = logging.getLogger(__name__)
 
 POLL_INTERVAL_S = 15
 DRAIN_TIMEOUT_S = 120

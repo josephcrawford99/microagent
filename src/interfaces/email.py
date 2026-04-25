@@ -20,7 +20,7 @@ from typing import ClassVar, Optional
 from lib.interface import Interface, Message
 from lib.settings import EmailSettings
 
-log = logging.getLogger("microagent.email")
+log = logging.getLogger(__name__)
 
 POLL_INTERVAL_S = 60
 DRAIN_TIMEOUT_S = 300
@@ -43,7 +43,7 @@ class Email(Interface):
     settings_cls = EmailSettings
 
     def __init__(
-        self, agent_id: str, settings: EmailSettings, password: str
+        self, agent_id: str, settings: EmailSettings, email_password: str
     ) -> None:
         super().__init__(agent_id)
         self.imap_host = settings.imap_host
@@ -51,7 +51,7 @@ class Email(Interface):
         self.smtp_host = settings.smtp_host
         self.smtp_port = settings.smtp_port
         self.username = settings.username
-        self.password = password
+        self.password = email_password
         self.allowed_senders = [s.lower() for s in settings.allowed_senders]
         self._drain = asyncio.Event()
 

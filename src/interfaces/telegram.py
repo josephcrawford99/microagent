@@ -22,7 +22,7 @@ from lib.interface import Interface, Message
 from lib.settings import TelegramSettings
 from lib.state import ComponentState
 
-log = logging.getLogger("microagent.telegram")
+log = logging.getLogger(__name__)
 
 API_BASE = "https://api.telegram.org"
 DRAIN_TIMEOUT_S = 120
@@ -36,10 +36,10 @@ class Telegram(Interface):
     settings_cls = TelegramSettings
 
     def __init__(
-        self, agent_id: str, settings: TelegramSettings, token: str
+        self, agent_id: str, settings: TelegramSettings, telegram_bot_token: str
     ) -> None:
         super().__init__(agent_id)
-        self.token = token
+        self.token = telegram_bot_token
         self.allowed_chat_ids = set(settings.allowed_chat_ids)
         self.poll_timeout = settings.poll_timeout
         self._state = ComponentState(agent_id, self.name)

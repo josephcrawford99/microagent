@@ -8,12 +8,21 @@ import logging
 import queue
 import threading
 import time
-from typing import Optional
+from typing import Optional, Protocol, runtime_checkable
 
 from lib.interface import Interface, Message
 from lib.settings import WebChatSettings
 
-log = logging.getLogger("microagent.web_chat")
+log = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class ChatView(Protocol):
+    """Capability the dashboard discovers on `agent.interfaces` to wire the
+    chat UI. Any interface that implements both methods can back /api/chat/*."""
+
+    def submit(self, text: str) -> None: ...
+    def get_log(self, after: int) -> dict: ...
 
 
 class WebChat(Interface):

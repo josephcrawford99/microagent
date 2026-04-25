@@ -22,7 +22,7 @@ from lib.source import (
     _error,
 )
 
-log = logging.getLogger("microagent.interface")
+log = logging.getLogger(__name__)
 
 
 class Interface(Source):

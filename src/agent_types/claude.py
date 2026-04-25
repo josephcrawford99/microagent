@@ -8,7 +8,7 @@ Each wake:
   - Grants the full Claude Code toolset with /space as cwd so the agent can
     keep notes / task lists / pages across wakes.
   - Resumes the prior session for continuity, but rotates to a fresh session
-    once per day (after `agents.claude.rotation_time`) — only if the previous
+    once per day (after `agents.<id>.rotation_time`) — only if the previous
     wake ended with `session_idle`, to avoid cutting a live conversation.
 
 State lives at /state/<agent_id>/agent.json. Usage is in-memory only — the
@@ -43,14 +43,14 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import RateLimitEvent
 
-from lib.agent import AgentType
+from lib.agent import AgentType, Settings
 from lib.settings import load_soul
 from lib.state import ComponentState
 
 if TYPE_CHECKING:
     from lib.interface import Trigger
 
-log = logging.getLogger("microagent.claude")
+log = logging.getLogger(__name__)
 
 DEFAULT_ROTATION_TIME = "03:00"
 AGENT_CWD = "/space"
@@ -59,7 +59,7 @@ AGENT_CWD = "/space"
 class Claude(AgentType):
     name = "claude"
 
-    def __init__(self, agent_id, settings, interfaces):
+    def __init__(self, agent_id: str, settings: Settings, interfaces):
         super().__init__(agent_id, settings, interfaces)
         self._state = ComponentState(agent_id, "agent")
         self.last_wake_stats: dict[str, Any] | None = None
@@ -76,7 +76,7 @@ class Claude(AgentType):
     async def on_wake(self, triggers: "list[Trigger]") -> None:
         soul_prompt = load_soul()
         rotation_time = _parse_rotation_time(
-            self.settings.agents.claude.rotation_time
+            self.settings.agents[self.agent_id].rotation_time
         )
 
         state = self._state.load()

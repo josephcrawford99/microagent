@@ -11,7 +11,7 @@ import threading
 from lib.interface import Interface, Message
 from lib.settings import SocketSettings
 
-log = logging.getLogger("microagent.socket")
+log = logging.getLogger(__name__)
 
 
 class Socket(Interface):
