@@ -16,10 +16,13 @@ import json
 import logging
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, ClassVar, Optional
+
+from pydantic import Field, SecretStr
 
 from lib.interface import Interface, Message
-from lib.settings import TelegramSettings
+from lib.settings import RootConfig
+from lib.source import InputSettings
 from lib.state import ComponentState
 
 log = logging.getLogger(__name__)
@@ -30,18 +33,37 @@ DRAIN_TIMEOUT_S = 120
 ERROR_BACKOFF_S = 5
 
 
+class TelegramSettings(InputSettings):
+    KIND: ClassVar[str] = "interfaces"
+    SECTION: ClassVar[str] = "telegram"
+    REQUIRED_ENV: ClassVar[tuple[str, ...]] = ("TELEGRAM_BOT_TOKEN",)
+    allowed_chat_ids: list[int] = Field(
+        default_factory=list,
+        json_schema_extra={
+            "ui": "whitelist",
+            "label": "Allowed chat IDs",
+            "placeholder": "12345678",
+            "help": "Telegram chat IDs permitted to message the agent. Empty = none can.",
+            "required_to_enable": True,
+        },
+    )
+    # getUpdates long-poll timeout. 30s keeps traffic near-zero while idle.
+    poll_timeout: int = 30
+    bot_token: SecretStr | None = Field(
+        default=None, validation_alias="TELEGRAM_BOT_TOKEN"
+    )
+
+
 class Telegram(Interface):
     name = "telegram"
-    required_env = ["TELEGRAM_BOT_TOKEN"]
     settings_cls = TelegramSettings
 
-    def __init__(
-        self, agent_id: str, settings: TelegramSettings, telegram_bot_token: str
-    ) -> None:
-        super().__init__(agent_id)
-        self.token = telegram_bot_token
-        self.allowed_chat_ids = set(settings.allowed_chat_ids)
-        self.poll_timeout = settings.poll_timeout
+    def __init__(self, agent_id: str, settings: RootConfig) -> None:
+        super().__init__(agent_id, settings)
+        cfg = TelegramSettings(settings)
+        self.token = cfg.bot_token.get_secret_value() if cfg.bot_token else ""
+        self.allowed_chat_ids = set(cfg.allowed_chat_ids)
+        self.poll_timeout = cfg.poll_timeout
         self._state = ComponentState(agent_id, self.name)
         self._pending: list[dict[str, Any]] = []
         self._all_fetched: list[dict[str, Any]] = []
@@ -264,3 +286,6 @@ _MDV2_SPECIAL = r"_*[]()~`>#+-=|{}.!\\"
 
 def _escape_md(text: str) -> str:
     return "".join("\\" + c if c in _MDV2_SPECIAL else c for c in text)
+
+
+Plugin = Telegram

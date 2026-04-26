@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, time
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -42,24 +43,42 @@ from claude_agent_sdk import (
     tool,
 )
 from claude_agent_sdk.types import RateLimitEvent
+from pydantic import Field, SecretStr
 
-from lib.agent import AgentType, Settings
-from lib.settings import load_soul
+from lib.agent import AgentSettings, AgentType
 from lib.state import ComponentState
 
 if TYPE_CHECKING:
     from lib.interface import Trigger
+    from lib.settings import RootConfig
 
 log = logging.getLogger(__name__)
 
 DEFAULT_ROTATION_TIME = "03:00"
 AGENT_CWD = "/space"
+SOUL_PATH = Path("/config/soul.md")
+
+
+def _load_soul() -> str:
+    """Read /config/soul.md. Empty string if missing."""
+    return SOUL_PATH.read_text().strip() if SOUL_PATH.exists() else ""
+
+
+class ClaudeSettings(AgentSettings):
+    REQUIRED_ENV: ClassVar[tuple[str, ...]] = ("CLAUDE_CODE_OAUTH_TOKEN",)
+    agent_type: str = "claude"
+    rotation_time: str = DEFAULT_ROTATION_TIME
+    # claude-agent-sdk reads CLAUDE_CODE_OAUTH_TOKEN from os.environ via the
+    # CLI it spawns; this field is for symmetry + dashboard introspection.
+    oauth_token: SecretStr | None = Field(
+        default=None, validation_alias="CLAUDE_CODE_OAUTH_TOKEN"
+    )
 
 
 class Claude(AgentType):
     name = "claude"
 
-    def __init__(self, agent_id: str, settings: Settings, interfaces):
+    def __init__(self, agent_id: str, settings: "RootConfig", interfaces):
         super().__init__(agent_id, settings, interfaces)
         self._state = ComponentState(agent_id, "agent")
         self.last_wake_stats: dict[str, Any] | None = None
@@ -74,10 +93,9 @@ class Claude(AgentType):
         return out
 
     async def on_wake(self, triggers: "list[Trigger]") -> None:
-        soul_prompt = load_soul()
-        rotation_time = _parse_rotation_time(
-            self.settings.agents[self.agent_id].rotation_time
-        )
+        soul_prompt = _load_soul()
+        cfg = ClaudeSettings(self.settings, agent_id=self.agent_id)
+        rotation_time = _parse_rotation_time(cfg.rotation_time)
 
         state = self._state.load()
         prior_session = (
@@ -327,3 +345,6 @@ def _make_idle_tool(idle_flag: dict[str, bool]) -> SdkMcpTool[Any]:
         return {"content": [{"type": "text", "text": "marked idle"}]}
 
     return session_idle_tool
+
+
+Plugin = Claude

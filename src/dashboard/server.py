@@ -30,9 +30,9 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
-from interfaces.web_chat import ChatView
+from sources.interfaces.web_chat import ChatView
 from lib import settings as cfg
-from lib.settings import Settings
+from lib.settings import RootConfig
 
 from .templates import LOGIN_HTML, PAGE_HTML
 
@@ -47,7 +47,7 @@ class DashboardServer:
 
     def __init__(
         self,
-        settings: Settings,
+        settings: RootConfig,
         agent,  # AgentType — avoids a cycle-y import
     ) -> None:
         self.settings = settings
@@ -55,17 +55,25 @@ class DashboardServer:
         self.chat_view: Optional[ChatView] = next(
             (i for i in agent.interfaces if isinstance(i, ChatView)), None
         )
-        self.owner_token = settings.dashboard_token.get_secret_value()
-        self.demo_token = settings.dashboard_demo_token.get_secret_value()
-        self.public_url = settings.dashboard.public_url
+        self.owner_token = (
+            settings.dashboard_token.get_secret_value()
+            if settings.dashboard_token
+            else ""
+        )
+        self.demo_token = (
+            settings.dashboard_demo_token.get_secret_value()
+            if settings.dashboard_demo_token
+            else ""
+        )
+        self.public_url = settings.dashboard_public_url
         if not self.owner_token:
             log.warning(
                 "dashboard has no DASHBOARD_TOKEN set; cloudflare requests will be rejected"
             )
 
     def start(self) -> None:
-        host = self.settings.dashboard.host
-        port = self.settings.dashboard.port
+        host = self.settings.dashboard_host
+        port = self.settings.dashboard_port
         srv = _DashboardHTTPServer((host, port), _Handler)
         srv.dashboard = self  # type: ignore[attr-defined]
         threading.Thread(target=srv.serve_forever, daemon=True).start()

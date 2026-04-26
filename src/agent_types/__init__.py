@@ -1,6 +1,3 @@
-from lib.agent import AgentType
-from lib.registry import discover
-
-import sys
-
-AGENT_TYPES: dict[str, type[AgentType]] = discover(sys.modules[__name__], AgentType)
+# AgentType plugins live as flat modules under this package; each module
+# exports its concrete `AgentType` subclass via `Plugin = ClassName`. The
+# loader is `lib.plugins.load_agent_type(name)` — no registry walk.

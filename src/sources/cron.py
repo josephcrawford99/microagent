@@ -21,12 +21,12 @@ import logging
 import re
 import uuid
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, ClassVar
 
 from claude_agent_sdk import SdkMcpTool, tool
 
-from lib.settings import CronSettings
-from lib.source import Message, Source, ToolArgs, ToolResult, _error
+from lib.settings import RootConfig
+from lib.source import InputSettings, Message, Source, ToolArgs, ToolResult, _error
 from lib.state import ComponentState
 
 log = logging.getLogger(__name__)
@@ -36,14 +36,26 @@ IDLE_SLEEP_S = 3600
 TIME_OF_DAY_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
 
+class CronSettings(InputSettings):
+    # Agent-schedulable wake source. Hard caps below bound how much the agent
+    # can spend on self-scheduled wakes; see this file's tool implementations.
+    KIND: ClassVar[str] = "sources"
+    SECTION: ClassVar[str] = "cron"
+    wake_on_event: bool = True
+    max_active: int = 8
+    min_delay_seconds: int = 60
+    max_fires_per_day: int = 24
+
+
 class Cron(Source):
     name = "cron"
     settings_cls = CronSettings
 
-    def __init__(self, agent_id: str, settings: CronSettings) -> None:
-        super().__init__(agent_id)
-        self._cfg = settings
-        self.wake_on_event = settings.wake_on_event
+    def __init__(self, agent_id: str, settings: RootConfig) -> None:
+        super().__init__(agent_id, settings)
+        cfg = CronSettings(settings)
+        self._cfg = cfg
+        self.wake_on_event = cfg.wake_on_event
         self._state = ComponentState(agent_id, "cron")
         self._wake_sched = asyncio.Event()
         self._lock = asyncio.Lock()
@@ -358,3 +370,6 @@ def _count_projected_fires(schedules: list[dict]) -> int:
 
 def _ok(msg: str) -> ToolResult:
     return {"content": [{"type": "text", "text": msg}]}
+
+
+Plugin = Cron

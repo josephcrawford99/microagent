@@ -11,41 +11,35 @@ import logging
 from dotenv import load_dotenv
 load_dotenv("/config/.env", override=True)
 
-from agent_types import AGENT_TYPES
 from lib.agent import AgentType
 from lib.log import setup_logging
-from lib.settings import Settings, enabled_sources
+from lib.plugins import load_agent_type
+from lib.settings import RootConfig, enabled_sources
 from lib.source import Trigger
 from dashboard import DashboardServer
 
 log = logging.getLogger(__name__)
 
 
-def get_agent(settings: Settings) -> AgentType:
+def get_agent(settings: RootConfig) -> AgentType:
     """Pick the first [agents.*] entry and build it with its inputs attached.
     Multi-agent is config-only for now — extras in settings.agents are parsed
     but ignored."""
     if not settings.agents:
         raise RuntimeError("no [agents.*] section in config.toml")
     agent_id, agent_cfg = next(iter(settings.agents.items()))
-    if agent_cfg.agent_type not in AGENT_TYPES:
-        raise RuntimeError(
-            f"unknown agent type '{agent_cfg.agent_type}', "
-            f"available: {list(AGENT_TYPES)}"
-        )
-    return AGENT_TYPES[agent_cfg.agent_type](
-        agent_id, settings, enabled_sources(settings)
-    )
+    cls = load_agent_type(agent_cfg["agent_type"])
+    return cls(agent_id, settings, enabled_sources(settings))
 
 
 async def main() -> None:
     setup_logging()
-    settings = Settings()
+    settings = RootConfig()
 
     agent = get_agent(settings)
     inputs = agent.interfaces
 
-    if settings.dashboard.enabled:
+    if settings.dashboard_enabled:
         DashboardServer(settings=settings, agent=agent).start()
 
     trigger_q: asyncio.Queue[Trigger] = asyncio.Queue()
@@ -57,7 +51,7 @@ async def main() -> None:
         agent.name,
         agent.agent_id,
         [i.name for i in inputs],
-        settings.dashboard.enabled,
+        settings.dashboard_enabled,
     )
 
     while True:

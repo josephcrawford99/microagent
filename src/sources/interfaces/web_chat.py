@@ -8,12 +8,18 @@ import logging
 import queue
 import threading
 import time
-from typing import Optional, Protocol, runtime_checkable
+from typing import ClassVar, Optional, Protocol, runtime_checkable
 
 from lib.interface import Interface, Message
-from lib.settings import WebChatSettings
+from lib.settings import RootConfig
+from lib.source import InputSettings
 
 log = logging.getLogger(__name__)
+
+
+class WebChatSettings(InputSettings):
+    KIND: ClassVar[str] = "interfaces"
+    SECTION: ClassVar[str] = "web_chat"
 
 
 @runtime_checkable
@@ -29,9 +35,11 @@ class WebChat(Interface):
     name = "web_chat"
     settings_cls = WebChatSettings
 
-    def __init__(self, agent_id: str, settings: WebChatSettings) -> None:
-        super().__init__(agent_id)
-        del settings  # reserved for future knobs
+    def __init__(self, agent_id: str, settings: RootConfig) -> None:
+        super().__init__(agent_id, settings)
+        # WebChatSettings has no knobs yet; constructed only to lock in the
+        # contract (and to surface validation errors locally if added).
+        WebChatSettings(settings)
         # Agent-facing inbox (drained by receive()).
         self._inbox: "queue.Queue[Message]" = queue.Queue()
         # UI-facing chat log (user + agent messages, the view polls for updates).
@@ -99,3 +107,6 @@ class WebChat(Interface):
             self._next_id += 1
             if len(self._log) > 500:
                 self._log = self._log[-500:]
+
+
+Plugin = WebChat

@@ -21,12 +21,42 @@ from dataclasses import asdict, dataclass
 from typing import Any, ClassVar, Optional
 
 from claude_agent_sdk import SdkMcpTool, tool
-from pydantic import BaseModel
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from lib.settings import CONFIG_ENV, RootConfig
 
 log = logging.getLogger(__name__)
 
 ToolArgs = dict[str, Any]
 ToolResult = dict[str, Any]
+
+
+class InputSettings(BaseSettings):
+    """Base for every Source/Interface settings model. Constructible from a
+    parent RootConfig — `SocketSettings(settings)` extracts the
+    `[<KIND>.<SECTION>]` slice and feeds it to BaseSettings as init kwargs;
+    pydantic-settings' env+dotenv sources fill in any `validation_alias`
+    fields (credentials)."""
+
+    model_config = SettingsConfigDict(
+        env_file=str(CONFIG_ENV),
+        case_sensitive=True,
+        extra="allow",
+    )
+
+    KIND: ClassVar[str]                            # "interfaces" | "sources"
+    SECTION: ClassVar[str]                         # "socket"
+    REQUIRED_ENV: ClassVar[tuple[str, ...]] = ()
+
+    enabled: bool = False
+
+    def __init__(self, parent: Optional[RootConfig] = None, /, **kwargs: Any) -> None:
+        if isinstance(parent, RootConfig):
+            cls = type(self)
+            section = getattr(parent, cls.KIND, {}).get(cls.SECTION, {}) or {}
+            super().__init__(**{**section, **kwargs})
+        else:
+            super().__init__(**kwargs)
 
 
 @dataclass
@@ -57,20 +87,24 @@ class Source:
     """Base for wake-capable inputs. Subclasses set `name`, implement
     `receive()`, and override `start()` to launch background monitoring
     that calls `self._signal()` whenever there's new work for the agent.
+
+    Subclass `__init__(agent_id, settings)` should `super().__init__(...)`
+    then build its typed cfg via `MyPluginSettings(settings)` and read
+    fields off it — `cfg.host`, `cfg.password.get_secret_value()`, etc.
     """
 
     name: str
     message_class: type[Message] = Message
-    required_env: ClassVar[list[str]] = []
     # Pydantic settings model for this Input. The dashboard introspects it
     # to discover ui-tagged fields (whitelists, etc.) and render editors.
-    settings_cls: ClassVar[Optional[type[BaseModel]]] = None
+    settings_cls: ClassVar[Optional[type[InputSettings]]] = None
     # Interfaces inherit Source and must always wake; source subclasses
     # override from their settings (defaulting False = agent-polled only).
     wake_on_event: bool = True
 
-    def __init__(self, agent_id: str) -> None:
+    def __init__(self, agent_id: str, settings: "RootConfig") -> None:
         self.agent_id = agent_id
+        self.settings = settings
         self._trigger_q: Optional[asyncio.Queue[Trigger]] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 

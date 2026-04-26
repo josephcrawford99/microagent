@@ -36,3 +36,6 @@ class Ping(AgentType):
                 )
                 status = await iface.send(reply)
                 log.info("%s -> %s: pong (%s)", iface.name, m.sender or "?", status)
+
+
+Plugin = Ping

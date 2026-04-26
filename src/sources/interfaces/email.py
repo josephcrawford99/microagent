@@ -17,10 +17,37 @@ from email import policy
 from email.message import EmailMessage as StdEmailMessage
 from typing import ClassVar, Optional
 
+from pydantic import Field, SecretStr
+
 from lib.interface import Interface, Message
-from lib.settings import EmailSettings
+from lib.settings import RootConfig
+from lib.source import InputSettings
 
 log = logging.getLogger(__name__)
+
+
+class EmailSettings(InputSettings):
+    KIND: ClassVar[str] = "interfaces"
+    SECTION: ClassVar[str] = "email"
+    REQUIRED_ENV: ClassVar[tuple[str, ...]] = ("EMAIL_PASSWORD",)
+    username: str = ""
+    imap_host: str = "imap.gmail.com"
+    imap_port: int = 993
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    password: SecretStr | None = Field(
+        default=None, validation_alias="EMAIL_PASSWORD"
+    )
+    allowed_senders: list[str] = Field(
+        default_factory=list,
+        json_schema_extra={
+            "ui": "whitelist",
+            "label": "Allowed senders",
+            "placeholder": "alice@example.com",
+            "help": "Email addresses permitted to wake the agent. Empty = no allowlist (every inbound email wakes).",
+            "required_to_enable": False,
+        },
+    )
 
 POLL_INTERVAL_S = 60
 DRAIN_TIMEOUT_S = 300
@@ -39,20 +66,18 @@ class EmailMessage(Message):
 class Email(Interface):
     name = "email"
     message_class = EmailMessage
-    required_env = ["EMAIL_PASSWORD"]
     settings_cls = EmailSettings
 
-    def __init__(
-        self, agent_id: str, settings: EmailSettings, email_password: str
-    ) -> None:
-        super().__init__(agent_id)
-        self.imap_host = settings.imap_host
-        self.imap_port = settings.imap_port
-        self.smtp_host = settings.smtp_host
-        self.smtp_port = settings.smtp_port
-        self.username = settings.username
-        self.password = email_password
-        self.allowed_senders = [s.lower() for s in settings.allowed_senders]
+    def __init__(self, agent_id: str, settings: RootConfig) -> None:
+        super().__init__(agent_id, settings)
+        cfg = EmailSettings(settings)
+        self.imap_host = cfg.imap_host
+        self.imap_port = cfg.imap_port
+        self.smtp_host = cfg.smtp_host
+        self.smtp_port = cfg.smtp_port
+        self.username = cfg.username
+        self.password = cfg.password.get_secret_value() if cfg.password else ""
+        self.allowed_senders = [s.lower() for s in cfg.allowed_senders]
         self._drain = asyncio.Event()
 
     # --- lifecycle ---
@@ -181,3 +206,6 @@ class Email(Interface):
             return ""
         content = part.get_content()
         return content if isinstance(content, str) else ""
+
+
+Plugin = Email

@@ -4,234 +4,121 @@ One module owns the on-disk config end to end. Two files drive everything:
   - /config/config.toml  — every non-secret setting; dashboard-editable
   - /config/.env         — secrets only (tokens, passwords); rotates independently
 
-Settings() is a read-only snapshot loaded at boot. Mutations below write the
-files on disk; the process must be restarted to pick them up — there is no
-live-reload path by design (interfaces hold slices of Settings captured at
-construction).
+`RootConfig` inherits from `pydantic_settings.BaseSettings`, so a no-arg
+`RootConfig()` reads both files and produces a frozen snapshot; the process
+must be restarted to pick up edits — there is no live-reload path by design
+(plugins hold slices captured at construction).
 
-Secrets are flat top-level fields on Settings so they bind to env vars by
-upper-case name with no alias gymnastics; non-secrets are nested models that
-mirror the TOML structure.
+Plugin-specific settings live next to their plugin's implementation and
+subclass `RootConfig` (via `InputSettings` / `AgentSettings` bases in
+`lib.source` and `lib.agent`). Each is constructible from the parent
+`RootConfig` — `SocketSettings(settings)` extracts the
+`[interfaces.socket]` slice and layers it onto the parent's data.
 """
 
 from __future__ import annotations
-
 import os
 import tomllib
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from lib.source import Source
-
+from typing import Any
 import tomli_w
-from pydantic import BaseModel, Field, SecretStr, TypeAdapter, ValidationError  # noqa: F401
+from pydantic import Field, SecretStr, TypeAdapter, ValidationError, model_validator
 from pydantic_settings import (
     BaseSettings,
     SettingsConfigDict,
     TomlConfigSettingsSource,
+    PydanticBaseSettingsSource,
+
 )
+from lib.source import Source
 
 CONFIG_DIR = Path("/config")
 CONFIG_TOML = CONFIG_DIR / "config.toml"
 CONFIG_ENV = CONFIG_DIR / ".env"
-SOUL_MD = CONFIG_DIR / "soul.md"
 
 
-# --- non-secret config models (mirror config.toml) -------------------------
-
-
-class UserSettings(BaseModel):
-    name: str = ""
-
-
-class SocketSettings(BaseModel):
-    enabled: bool = False
-    host: str = "0.0.0.0"
-    port: int = 8765
-
-
-class EmailSettings(BaseModel):
-    enabled: bool = False
-    username: str = ""
-    imap_host: str = "imap.gmail.com"
-    imap_port: int = 993
-    smtp_host: str = "smtp.gmail.com"
-    smtp_port: int = 587
-    allowed_senders: list[str] = Field(
-        default_factory=list,
-        json_schema_extra={
-            "ui": "whitelist",
-            "label": "Allowed senders",
-            "placeholder": "alice@example.com",
-            "help": "Email addresses permitted to wake the agent. Empty = no allowlist (every inbound email wakes).",
-            "required_to_enable": False,
-        },
-    )
-
-
-class TelegramSettings(BaseModel):
-    enabled: bool = False
-    allowed_chat_ids: list[int] = Field(
-        default_factory=list,
-        json_schema_extra={
-            "ui": "whitelist",
-            "label": "Allowed chat IDs",
-            "placeholder": "12345678",
-            "help": "Telegram chat IDs permitted to message the agent. Empty = none can.",
-            "required_to_enable": True,
-        },
-    )
-    # getUpdates long-poll timeout. 30s keeps traffic near-zero while idle.
-    poll_timeout: int = 30
-
-
-class IMessageSettings(BaseModel):
-    enabled: bool = False
-    wake_on_event: bool = False
-    db_path: str = "/mnt/imessage/chat.db"
-
-
-class CronSettings(BaseModel):
-    # Agent-schedulable wake source. Hard caps below bound how much the agent
-    # can spend on self-scheduled wakes; see src/sources/cron.py.
-    enabled: bool = False
-    wake_on_event: bool = True
-    max_active: int = 8
-    min_delay_seconds: int = 60
-    max_fires_per_day: int = 24
-
-
-class WebChatSettings(BaseModel):
-    enabled: bool = False
-
-
-class InterfacesSettings(BaseModel):
-    socket: SocketSettings = SocketSettings()
-    email: EmailSettings = EmailSettings()
-    telegram: TelegramSettings = TelegramSettings()
-    web_chat: WebChatSettings = WebChatSettings()
-
-
-class SourcesSettings(BaseModel):
-    imessage: IMessageSettings = IMessageSettings()
-    cron: CronSettings = CronSettings()
-
-
-class DashboardSettings(BaseModel):
-    enabled: bool = False
-    host: str = "0.0.0.0"
-    port: int = 8767
-    public_url: str = ""
-
-
-class AgentConfig(BaseModel):
-    """One [agents.<id>] section. `agent_type` selects the runtime; everything
-    else is per-type config passed through verbatim."""
-
-    model_config = {"extra": "allow"}
-
-    agent_type: str
-    rotation_time: str = "03:00"
-    cli_settings: dict[str, Any] = Field(default_factory=dict)
-
-
-# --- top-level Settings -----------------------------------------------------
-
-
-class Settings(BaseSettings):
-    """Root config. Instantiate once at boot; pass slices down."""
+class RootConfig(BaseSettings):
+    """Root config. Plugin-specific settings subclass this and override
+    `__init__` to extract their slice — see `lib.source.InputSettings` and
+    `lib.agent.AgentSettings`."""
 
     model_config = SettingsConfigDict(
         toml_file=str(CONFIG_TOML),
         env_file=str(CONFIG_ENV),
-        env_file_encoding="utf-8",
-        extra="ignore",
+        case_sensitive=True,
+        extra="allow",
     )
 
-    # Non-secret, from TOML
-    user: UserSettings = UserSettings()
-    interfaces: InterfacesSettings = InterfacesSettings()
-    sources: SourcesSettings = SourcesSettings()
-    dashboard: DashboardSettings = DashboardSettings()
-    # Keyed by agent id. The daemon runs the first entry.
-    agents: dict[str, AgentConfig] = Field(
-        default_factory=lambda: {"primary": AgentConfig(agent_type="claude")}
+    dashboard_enabled: bool = False
+    dashboard_host: str = "0.0.0.0"
+    dashboard_port: int = 8767
+    dashboard_public_url: str = ""
+    dashboard_token: SecretStr | None = Field(
+        default=None, validation_alias="DASHBOARD_TOKEN"
     )
-
-    # Secrets, from .env (flat top-level bind to upper-case env var names)
-    email_password: SecretStr = SecretStr("")
-    telegram_bot_token: SecretStr = SecretStr("")
-    dashboard_token: SecretStr = SecretStr("")
-    dashboard_demo_token: SecretStr = SecretStr("")
+    dashboard_demo_token: SecretStr | None = Field(
+        default=None, validation_alias="DASHBOARD_DEMO_TOKEN"
+    )
+    interfaces: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    sources: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    agents: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     @classmethod
     def settings_customise_sources(
         cls,
-        settings_cls,
-        init_settings,
-        env_settings,
-        dotenv_settings,
-        file_secret_settings,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
     ):
-        # Priority (first wins): init kwargs > env > .env > TOML > defaults.
-        # Secrets live in env/.env; non-secrets in TOML. No overlap expected.
+        """Pydantic way of defining how to load settings in order"""
         return (
             init_settings,
             env_settings,
             dotenv_settings,
             TomlConfigSettingsSource(settings_cls),
-            file_secret_settings,
         )
 
-    def env_secrets(self) -> dict[str, str]:
-        """{ENV_VAR_NAME: value} for every SecretStr field on Settings, keyed
-        by upper-case field name. Sole caller is main.py, which resolves each
-        Input's required_env into constructor kwargs. Dashboard secrets
-        (dashboard_token, dashboard_demo_token) appear here too but no Input
-        claims them — dashboard code reads those directly off Settings."""
-        out: dict[str, str] = {}
-        for name, value in self:
-            if isinstance(value, SecretStr):
-                out[name.upper()] = value.get_secret_value()
-        return out
+    @model_validator(mode="before")
+    @classmethod
+    def _flatten_dashboard(cls, data: Any) -> Any:
+        # Lift [dashboard].* into top-level dashboard_* fields. TOML on disk
+        # stays nested; this is purely a model-shape concession so we don't
+        # need a separate DashboardSettings class.
+        if isinstance(data, dict) and isinstance(data.get("dashboard"), dict):
+            for k, v in data.pop("dashboard").items():
+                data.setdefault(f"dashboard_{k}", v)
+        # Default to a single primary claude agent if [agents.*] is missing.
+        if isinstance(data, dict) and not data.get("agents"):
+            data["agents"] = {"primary": {"agent_type": "claude"}}
+        return data
 
 
-def enabled_sources(settings: "Settings") -> list["Source"]:
-    """Instantiate every enabled Interface and Source from their registries.
-    Interface is a Source subclass, so main combines them into one input list.
-    Missing env vars bind to empty strings — the dashboard surfaces those as
-    `missing_env` separately, and the Input itself will fail loudly on connect.
+def enabled_sources(settings: "RootConfig") -> list["Source"]:
+    """Lazy-load and instantiate every enabled Interface and Source. Iterates
+    the loaded `[interfaces.*]` / `[sources.*]` sections; for each section
+    with `enabled = true`, imports `<kind>.<name>` and constructs its
+    `Plugin` class with `(agent_id, settings)`.
 
-    Sources need an agent_id for their per-agent state paths — we use the first
-    [agents.*] id, matching the daemon's single-agent runtime."""
-    from interfaces import INTERFACES
-    from sources import SOURCES
+    Sources need an agent_id for their per-agent state paths — we use the
+    first [agents.*] id, matching the daemon's single-agent runtime."""
+    from lib.plugins import load_input  # local — avoid cycle
 
     if not settings.agents:
         raise RuntimeError("no [agents.*] section in config.toml")
     agent_id = next(iter(settings.agents))
-    env = settings.env_secrets()
-    out: list[Source] = []
-    for registry, section in (
-        (INTERFACES, settings.interfaces),
-        (SOURCES, settings.sources),
+    out: list["Source"] = []
+    for kind, section in (
+        ("interfaces", settings.interfaces),
+        ("sources", settings.sources),
     ):
-        for name, cls in registry.items():
-            cfg = getattr(section, name)
-            if not cfg.enabled:
+        for name, cfg in section.items():
+            if not isinstance(cfg, dict) or not cfg.get("enabled"):
                 continue
-            kwargs = {k.lower(): env.get(k, "") for k in cls.required_env}
-            out.append(cls(agent_id, cfg, **kwargs))
+            cls = load_input(kind, name)
+            out.append(cls(agent_id, settings))
     return out
-
-
-def load_soul() -> str:
-    """Read /config/soul.md. Returns empty string if missing — agents should
-    treat that as 'no identity prompt' and log a warning rather than crash."""
-    if not SOUL_MD.exists():
-        return ""
-    return SOUL_MD.read_text().strip()
 
 
 # --- file I/O --------------------------------------------------------------
@@ -285,19 +172,18 @@ def read_toml_text() -> str:
 def write_toml_text(text: str) -> None:
     """Validate raw TOML, then round-trip through tomli_w so the file stays
     well-formed and canonically formatted."""
-    _write_toml_data(tomllib.loads(text))
+    _write_toml(tomllib.loads(text))
 
 
-def _load_toml_data() -> dict[str, Any]:
+def _load_toml() -> dict[str, Any]:
     try:
         return tomllib.loads(CONFIG_TOML.read_text())
     except FileNotFoundError:
         return {}
 
 
-def _write_toml_data(data: dict[str, Any]) -> None:
-    buf = tomli_w.dumps(data).encode("utf-8")
-    _atomic_write_bytes(CONFIG_TOML, buf)
+def _write_toml(data: dict[str, Any]) -> None:
+    _atomic_write_bytes(CONFIG_TOML, tomli_w.dumps(data).encode("utf-8"))
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
@@ -311,52 +197,37 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
 # --- typed mutations -------------------------------------------------------
 
 
-def registry_kind(name: str) -> str | None:
-    """Return 'interfaces' or 'sources' depending on which registry owns the
-    given input name. None if unknown. Lazy registry import keeps this module
-    a leaf at import time."""
-    from interfaces import INTERFACES
-    from sources import SOURCES
-
-    if name in INTERFACES:
-        return "interfaces"
-    if name in SOURCES:
-        return "sources"
-    return None
-
-
 def _lookup(name: str) -> tuple[str, type]:
-    from interfaces import INTERFACES
-    from sources import SOURCES
+    """Resolve a section name to (kind, settings_cls). Reads the TOML to
+    decide kind, then lazy-imports the plugin's settings class."""
+    from lib.plugins import load_input_settings
 
-    if name in INTERFACES:
-        return "interfaces", INTERFACES[name]
-    if name in SOURCES:
-        return "sources", SOURCES[name]
+    toml = _load_toml()
+    if name in (toml.get("interfaces") or {}):
+        return "interfaces", load_input_settings("interfaces", name)
+    if name in (toml.get("sources") or {}):
+        return "sources", load_input_settings("sources", name)
     raise ValueError(f"unknown input: {name}")
 
 
-def _write_section_field(name: str, field: str, value: Any) -> None:
-    """Write `[<kind>.<name>].<field> = value` into config.toml, preserving
-    the rest of the file."""
-    kind, _ = _lookup(name)
-    data = _load_toml_data()
+def _write_section_field(kind: str, name: str, field: str, value: Any) -> None:
+    data = _load_toml()
     data.setdefault(kind, {}).setdefault(name, {})[field] = value
-    _write_toml_data(data)
+    _write_toml(data)
 
 
 def toggle(name: str, enabled: bool) -> None:
     """Flip `[<kind>.<name>].enabled` where kind is interfaces or sources."""
-    _write_section_field(name, "enabled", bool(enabled))
+    kind, _ = _lookup(name)
+    _write_section_field(kind, name, "enabled", bool(enabled))
 
 
 def set_wake(name: str, wake: bool) -> None:
-    """Flip `[sources.<name>].wake_on_event`. Sources only — interfaces
-    always wake."""
+    """Flip `[sources.<name>].wake_on_event`. Sources only — interfaces always wake."""
     kind, _ = _lookup(name)
     if kind != "sources":
         raise ValueError(f"wake toggle only valid for sources: {name}")
-    _write_section_field(name, "wake_on_event", bool(wake))
+    _write_section_field(kind, name, "wake_on_event", bool(wake))
 
 
 def set_field(name: str, field: str, value: Any) -> Any:
@@ -364,34 +235,31 @@ def set_field(name: str, field: str, value: Any) -> Any:
     field is in the Input's editable schema (anti-clobber), runs the value
     through pydantic's TypeAdapter for the field's annotation, and persists
     the coerced value."""
-    _, cls = _lookup(name)
-    if field not in {f["name"] for f in editable_fields(cls)}:
+    kind, settings_cls = _lookup(name)
+    if not any(f["name"] == field for f in editable_fields(settings_cls)):
         raise ValueError(f"field {field!r} is not editable on {name}")
-    finfo = cls.settings_cls.model_fields[field]
+    finfo = settings_cls.model_fields[field]
     try:
         coerced = TypeAdapter(finfo.annotation).validate_python(value)
     except ValidationError as e:
         raise ValueError(str(e)) from None
-    _write_section_field(name, field, coerced)
+    _write_section_field(kind, name, field, coerced)
     return coerced
 
 
 # --- introspection (dashboard) ---------------------------------------------
 
 
-def editable_fields(cls) -> list[dict[str, Any]]:
-    """Return the ui-tagged fields on cls.settings_cls. Today only
+def editable_fields(settings_cls) -> list[dict[str, Any]]:
+    """Return the ui-tagged fields on settings_cls. Today only
     `ui: "whitelist"` is recognized; extend the schema-extra contract here
     when adding new editor kinds (string, secret, …)."""
-    settings_cls = getattr(cls, "settings_cls", None)
     if settings_cls is None:
         return []
     out: list[dict[str, Any]] = []
     for fname, finfo in settings_cls.model_fields.items():
         extra = finfo.json_schema_extra or {}
-        if not isinstance(extra, dict):
-            continue
-        if extra.get("ui") != "whitelist":
+        if not isinstance(extra, dict) or extra.get("ui") != "whitelist":
             continue
         out.append({
             "name": fname,
@@ -404,22 +272,22 @@ def editable_fields(cls) -> list[dict[str, Any]]:
 
 
 def inputs_status() -> list[dict[str, Any]]:
-    """One row per discovered wake-input (Interface or Source): name, kind,
-    enabled (from config.toml), required_env, and which of those are
-    currently missing from .env. Shape is the dashboard bootstrap contract."""
-    from interfaces import INTERFACES
-    from sources import SOURCES
+    """One row per discovered wake-input: name, kind, enabled (from TOML),
+    required_env, missing_env. Catalog is whatever sections appear in
+    config.toml — every plugin shipped with the harness gets seeded into
+    config.default.toml on first boot."""
+    from lib.plugins import load_input_settings
 
     env = read_env()
-    data = _load_toml_data()
-    interfaces_section = data.get("interfaces", {}) if isinstance(data, dict) else {}
-    sources_section = data.get("sources", {}) if isinstance(data, dict) else {}
+    data = _load_toml()
 
-    def row(kind: str, name: str, cls) -> dict[str, Any]:
-        section_root = interfaces_section if kind == "interfaces" else sources_section
-        section = section_root.get(name, {}) if isinstance(section_root, dict) else {}
-        section = section if isinstance(section, dict) else {}
-        required = list(getattr(cls, "required_env", []) or [])
+    def row(kind: str, name: str) -> dict[str, Any] | None:
+        try:
+            settings_cls = load_input_settings(kind, name)
+        except (ImportError, AttributeError):
+            return None  # plugin module missing — silently skip
+        section = data.get(kind, {}).get(name, {})
+        required = list(getattr(settings_cls, "REQUIRED_ENV", ()))
         out: dict[str, Any] = {
             "name": name,
             "kind": kind,
@@ -428,28 +296,27 @@ def inputs_status() -> list[dict[str, Any]]:
             "missing_env": [k for k in required if not env.get(k)],
         }
         if kind == "sources":
-            # Fallback mirrors the source's settings-model default so the UI
-            # matches code behaviour when the field is absent from config.toml.
-            default_wake = False
-            if cls.settings_cls is not None:
-                try:
-                    default_wake = bool(cls.settings_cls().wake_on_event)
-                except Exception:
-                    default_wake = False
+            wake_field = settings_cls.model_fields.get("wake_on_event")
+            default_wake = (
+                bool(wake_field.default) if wake_field is not None else True
+            )
             out["wake_on_event"] = bool(section.get("wake_on_event", default_wake))
-        fields = editable_fields(cls)
+        fields = editable_fields(settings_cls)
         if fields:
             out["editable_fields"] = fields
-            values: dict[str, Any] = {}
-            for f in fields:
-                v = section.get(f["name"])
-                values[f["name"]] = v if isinstance(v, list) else []
-            out["field_values"] = values
+            # Whitelist editor expects a list; tolerate hand-edited toml that
+            # set a scalar by surfacing it as empty so the user can re-edit.
+            out["field_values"] = {
+                f["name"]: v if isinstance(v := section.get(f["name"]), list) else []
+                for f in fields
+            }
         return out
 
     rows: list[dict[str, Any]] = []
-    for n in sorted(INTERFACES):
-        rows.append(row("interfaces", n, INTERFACES[n]))
-    for n in sorted(SOURCES):
-        rows.append(row("sources", n, SOURCES[n]))
+    for n in sorted(data.get("interfaces", {})):
+        if r := row("interfaces", n):
+            rows.append(r)
+    for n in sorted(data.get("sources", {})):
+        if r := row("sources", n):
+            rows.append(r)
     return rows

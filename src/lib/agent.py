@@ -12,20 +12,55 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, ClassVar, Optional
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from lib.settings import CONFIG_ENV, RootConfig
 
 if TYPE_CHECKING:
-    from lib.settings import Settings
     from lib.source import Source, Trigger
 
 log = logging.getLogger(__name__)
+
+
+class AgentSettings(BaseSettings):
+    """Base for every AgentType settings model. Constructible from a parent
+    RootConfig + agent_id — `ClaudeSettings(settings, agent_id="primary")`
+    extracts the `[agents.<id>]` slice and feeds it to BaseSettings as init
+    kwargs; pydantic-settings' env+dotenv sources fill in any
+    `validation_alias` fields (credentials)."""
+
+    model_config = SettingsConfigDict(
+        env_file=str(CONFIG_ENV),
+        case_sensitive=True,
+        extra="allow",
+    )
+
+    REQUIRED_ENV: ClassVar[tuple[str, ...]] = ()
+
+    agent_type: str = ""
+
+    def __init__(
+        self,
+        parent: Optional[RootConfig] = None,
+        /,
+        *,
+        agent_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> None:
+        if isinstance(parent, RootConfig) and agent_id is not None:
+            section = parent.agents.get(agent_id, {}) or {}
+            super().__init__(**{**section, **kwargs})
+        else:
+            super().__init__(**kwargs)
 
 
 class AgentType:
     name: str
 
     def __init__(
-        self, agent_id: str, settings: "Settings", interfaces: list["Source"]
+        self, agent_id: str, settings: "RootConfig", interfaces: list["Source"]
     ) -> None:
         self.agent_id = agent_id
         self.settings = settings

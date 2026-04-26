@@ -119,7 +119,7 @@ Hard caps in config bound the "agent schedules a wake storm" failure mode — de
 
 ## Dashboard
 
-HTTP control panel at `:8767`. Not an agent interface — it's a separate view that reads `Settings`, writes `/config/config.toml` via `tomli-w`, rotates `/config/.env`, and proxies chat to the `web_chat` interface.
+HTTP control panel at `:8767`. Not an agent interface — it's a separate view that reads `RootConfig`, writes `/config/config.toml` via `tomli-w`, rotates `/config/.env`, and proxies chat to the `web_chat` interface.
 
 **Auth:**
 - Direct LAN hits are trusted ("owner" role).

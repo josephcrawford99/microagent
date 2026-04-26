@@ -13,9 +13,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+from typing import ClassVar
 
-from lib.settings import IMessageSettings
-from lib.source import Message, Source
+from lib.settings import RootConfig
+from lib.source import InputSettings, Message, Source
 from lib.state import ComponentState
 
 log = logging.getLogger(__name__)
@@ -24,14 +25,22 @@ POLL_INTERVAL_S = 15
 DRAIN_TIMEOUT_S = 120
 
 
+class IMessageSettings(InputSettings):
+    KIND: ClassVar[str] = "sources"
+    SECTION: ClassVar[str] = "imessage"
+    wake_on_event: bool = False
+    db_path: str = "/mnt/imessage/chat.db"
+
+
 class IMessage(Source):
     name = "imessage"
     settings_cls = IMessageSettings
 
-    def __init__(self, agent_id: str, settings: IMessageSettings) -> None:
-        super().__init__(agent_id)
-        self.wake_on_event = settings.wake_on_event
-        self.db_path = settings.db_path
+    def __init__(self, agent_id: str, settings: RootConfig) -> None:
+        super().__init__(agent_id, settings)
+        cfg = IMessageSettings(settings)
+        self.wake_on_event = cfg.wake_on_event
+        self.db_path = cfg.db_path
         self._state = ComponentState(agent_id, self.name)
         # First-boot: seed watermark to current max ROWID so we don't flood.
         self._state.load_or_init(lambda: {"last_seen": self._current_max_rowid()})
@@ -128,3 +137,6 @@ class IMessage(Source):
 
     def _save_last_seen(self, rowid: int) -> None:
         self._state.save({"last_seen": int(rowid)})
+
+
+Plugin = IMessage

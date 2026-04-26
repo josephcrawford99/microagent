@@ -7,21 +7,31 @@ import logging
 import queue
 import socket
 import threading
+from typing import ClassVar
 
 from lib.interface import Interface, Message
-from lib.settings import SocketSettings
+from lib.settings import RootConfig
+from lib.source import InputSettings
 
 log = logging.getLogger(__name__)
+
+
+class SocketSettings(InputSettings):
+    KIND: ClassVar[str] = "interfaces"
+    SECTION: ClassVar[str] = "socket"
+    host: str = "0.0.0.0"
+    port: int = 8765
 
 
 class Socket(Interface):
     name = "socket"
     settings_cls = SocketSettings
 
-    def __init__(self, agent_id: str, settings: SocketSettings) -> None:
-        super().__init__(agent_id)
-        self.host = settings.host
-        self.port = settings.port
+    def __init__(self, agent_id: str, settings: RootConfig) -> None:
+        super().__init__(agent_id, settings)
+        cfg = SocketSettings(settings)
+        self.host = cfg.host
+        self.port = cfg.port
         self._inbox: "queue.Queue[Message]" = queue.Queue()
         self._clients: list[socket.socket] = []
         self._lock = threading.Lock()
@@ -104,3 +114,6 @@ class Socket(Interface):
                     except Exception:
                         pass
         return f"sent to {len(clients) - len(dead)} client(s)"
+
+
+Plugin = Socket
