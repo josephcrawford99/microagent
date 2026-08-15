@@ -9,7 +9,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from dotenv import load_dotenv
-load_dotenv("/config/.env", override=True)
+
+# Bootstrap: a repo-root .env can set MICROAGENT_CONFIG_DIR/STATE_DIR/SPACE_DIR
+# (plus local API keys) for host runs. No override — a real shell export wins.
+# Must precede every lib.* import; lib.paths reads the env at import time.
+load_dotenv()
+
+from lib.paths import CONFIG_ENV
+# The config dir's .env is the source of truth for secrets, and does override,
+# so a rotation written by POST /api/env lands on the next restart.
+load_dotenv(CONFIG_ENV, override=True)
 
 from lib.agent import AgentType
 from lib.log import setup_logging
@@ -28,7 +37,10 @@ def get_agent(settings: RootConfig) -> AgentType:
     if not settings.agents:
         raise RuntimeError("no [agents.*] section in config.toml")
     agent_id, agent_cfg = next(iter(settings.agents.items()))
-    cls = load_agent_type(agent_cfg["agent_type"])
+    agent_type = (agent_cfg or {}).get("agent_type")
+    if not agent_type:
+        raise RuntimeError(f"[agents.{agent_id}] is missing `agent_type`")
+    cls = load_agent_type(agent_type)
     return cls(agent_id, settings, enabled_sources(settings))
 
 

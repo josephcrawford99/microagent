@@ -2,7 +2,7 @@
 at /mnt/imessage/chat.db by default).
 
 No send path — outbound is delegated to other channels. The agent reads
-via the imessage_receive MCP tool; sender filtering (if any) is the agent's
+via the `imessage.poll` tool; sender filtering (if any) is the agent's
 job. Watermark (last observed ROWID) persists via ComponentState; first
 boot seeds it to current max ROWID to avoid flooding the agent with
 historical messages.
@@ -55,7 +55,7 @@ class IMessage(Source):
         new messages and await drain (receive() sets it) before the next
         check — so we don't re-signal the same unread run while the agent
         is still processing. Passive (wake_on_event=False): just keep the
-        watermark fresh; agent will pull via imessage_receive on its own."""
+        watermark fresh; agent will pull via `imessage.poll` on its own."""
         while True:
             try:
                 count = await asyncio.to_thread(self._count_new)

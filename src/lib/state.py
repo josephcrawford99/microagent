@@ -14,9 +14,9 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
-log = logging.getLogger(__name__)
+from lib.paths import STATE_DIR as STATE_ROOT
 
-STATE_ROOT = Path("/state")
+log = logging.getLogger(__name__)
 
 
 class ComponentState:

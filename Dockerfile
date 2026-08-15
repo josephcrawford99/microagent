@@ -2,12 +2,8 @@ FROM python:3.12-alpine
 
 RUN apk add --no-cache nodejs npm git
 RUN npm install -g @anthropic-ai/claude-code
-RUN pip install --no-cache-dir \
-    claude-agent-sdk \
-    python-dotenv \
-    pydantic \
-    pydantic-settings \
-    tomli-w
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Commit-attribution setting for the Claude Code CLI: suppress the
 # Co-Authored-By: Claude trailer. Baked into the image (not runtime config).

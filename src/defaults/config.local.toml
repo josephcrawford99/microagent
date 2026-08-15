@@ -1,0 +1,44 @@
+# Local test profile, seeded into ./local/config/config.toml by
+# scripts/run_local.sh. Not used by the container.
+#
+# Secrets come from the gitignored repo-root .env (GEMINI_API_KEY, …).
+
+[user]
+name = ""
+
+[agents.primary]
+agent_type = "gemini"
+model = "gemini-3.6-flash"
+max_turns = 12
+# Tool modules from src/tools/ this agent may use. Omit for the agent type's
+# default (every channel + poll/session/status/cron/bash).
+#   tools = ["poll", "socket", "session", "status"]
+
+[dashboard]
+enabled = true
+host = "127.0.0.1"
+port = 8767
+public_url = ""
+
+# The easiest thing to talk to locally: `nc localhost 8765`, type a line.
+[interfaces.socket]
+enabled = true
+host = "127.0.0.1"
+port = 8765
+
+[interfaces.web_chat]
+enabled = true
+
+[interfaces.email]
+enabled = false
+
+[interfaces.telegram]
+enabled = false
+
+[sources.imessage]
+enabled = false
+wake_on_event = false
+
+[sources.cron]
+enabled = false
+wake_on_event = true

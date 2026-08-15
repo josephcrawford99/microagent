@@ -32,6 +32,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from sources.interfaces.web_chat import ChatView
 from lib import settings as cfg
+from lib.paths import REPO_DIR, SPACE_DIR as _SPACE_DIR
 from lib.settings import RootConfig
 
 from .templates import LOGIN_HTML, PAGE_HTML
@@ -39,7 +40,8 @@ from .templates import LOGIN_HTML, PAGE_HTML
 log = logging.getLogger(__name__)
 
 COOKIE_NAME = "dash_token"
-SPACE_DIR = "/space"
+SPACE_DIR = str(_SPACE_DIR)
+REPO = str(REPO_DIR)
 
 
 class DashboardServer:
@@ -147,25 +149,25 @@ def _exit_soon() -> None:
 
 
 def _git_pull(branch: str = "main") -> str:
-    """Make /repo byte-identical to origin/<branch>. Destructive: drops
+    """Make the repo dir byte-identical to origin/<branch>. Destructive: drops
     tracked changes (reset --hard) and wipes every untracked or ignored
     file (clean -fdx), including `__pycache__/`, `.env`, `.DS_Store`, and
     any stray files the agent may have written. The canonical .env lives
     in /config/ and is never touched."""
     subprocess.run(
-        ["git", "-C", "/repo", "fetch", "origin", branch],
+        ["git", "-C", REPO, "fetch", "origin", branch],
         check=True, capture_output=True,
     )
     subprocess.run(
-        ["git", "-C", "/repo", "reset", "--hard", f"origin/{branch}"],
+        ["git", "-C", REPO, "reset", "--hard", f"origin/{branch}"],
         check=True, capture_output=True,
     )
     subprocess.run(
-        ["git", "-C", "/repo", "clean", "-fdx"],
+        ["git", "-C", REPO, "clean", "-fdx"],
         check=True, capture_output=True,
     )
     return subprocess.run(
-        ["git", "-C", "/repo", "rev-parse", "--short", "HEAD"],
+        ["git", "-C", REPO, "rev-parse", "--short", "HEAD"],
         check=True, capture_output=True, text=True,
     ).stdout.strip()
 
@@ -380,6 +382,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "env": {},
                 "config_toml": "",
                 "interfaces": [],
+                "agent": {},
                 "usage": {},
                 "public_url": self.dash.public_url,
             })
@@ -389,6 +392,7 @@ class _Handler(BaseHTTPRequestHandler):
             "env": cfg.read_env(),
             "config_toml": cfg.read_toml_text(),
             "interfaces": cfg.inputs_status(),
+            "agent": cfg.agent_status(self.dash.settings),
             "usage": self.dash.agent.get_usage(),
             "public_url": self.dash.public_url,
         })

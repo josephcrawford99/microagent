@@ -1,26 +1,21 @@
-"""Typed config: schema + read + write + introspection.
+"""Everything that touches the on-disk config: `/config/config.toml`
+(non-secret settings) and `/config/.env` (secrets).
 
-One module owns the on-disk config end to end. Two files drive everything:
-  - /config/config.toml  — every non-secret setting; dashboard-editable
-  - /config/.env         — secrets only (tokens, passwords); rotates independently
+- `RootConfig` — the schema. `RootConfig()` reads both files; no live reload,
+  restart to pick up edits.
+- read/write helpers — used by the dashboard to edit those files.
+- introspection — what the dashboard renders (editable fields, input status).
 
-`RootConfig` inherits from `pydantic_settings.BaseSettings`, so a no-arg
-`RootConfig()` reads both files and produces a frozen snapshot; the process
-must be restarted to pick up edits — there is no live-reload path by design
-(plugins hold slices captured at construction).
-
-Plugin-specific settings live next to their plugin's implementation and
-subclass `RootConfig` (via `InputSettings` / `AgentSettings` bases in
-`lib.source` and `lib.agent`). Each is constructible from the parent
-`RootConfig` — `SocketSettings(settings)` extracts the
-`[interfaces.socket]` slice and layers it onto the parent's data.
+Plugin settings subclass `RootConfig` and live with their plugin; each takes
+the parent config and extracts its own section (`SocketSettings(settings)` →
+`[interfaces.socket]`). See `lib.source.InputSettings` / `lib.agent.AgentSettings`.
 """
 
 from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import tomli_w
 from pydantic import Field, SecretStr, TypeAdapter, ValidationError, model_validator
 from pydantic_settings import (
@@ -30,11 +25,12 @@ from pydantic_settings import (
     PydanticBaseSettingsSource,
 
 )
-from lib.source import Source
+from lib.paths import CONFIG_ENV, CONFIG_TOML
 
-CONFIG_DIR = Path("/config")
-CONFIG_TOML = CONFIG_DIR / "config.toml"
-CONFIG_ENV = CONFIG_DIR / ".env"
+# Type-only: lib.source imports RootConfig at runtime, so importing Source here
+# for real would close the cycle. Every use below is a quoted annotation.
+if TYPE_CHECKING:
+    from lib.source import Source
 
 
 class RootConfig(BaseSettings):
@@ -170,9 +166,11 @@ def read_toml_text() -> str:
 
 
 def write_toml_text(text: str) -> None:
-    """Validate raw TOML, then round-trip through tomli_w so the file stays
-    well-formed and canonically formatted."""
-    _write_toml(tomllib.loads(text))
+    """Validate raw TOML, then persist it verbatim. Parsing is the guard
+    against writing a broken config; writing the original text (rather than a
+    tomli_w round-trip) keeps the user's comments and layout intact."""
+    tomllib.loads(text)
+    _atomic_write_bytes(CONFIG_TOML, text.encode("utf-8"))
 
 
 def _load_toml() -> dict[str, Any]:
@@ -269,6 +267,32 @@ def editable_fields(settings_cls) -> list[dict[str, Any]]:
             "required_to_enable": bool(extra.get("required_to_enable", False)),
         })
     return out
+
+
+def agent_status(settings: "RootConfig") -> dict[str, Any]:
+    """The active agent's identity + credential readiness, mirroring what
+    `inputs_status()` reports per input. `missing_env` is what the dashboard
+    needs to explain why an agent can't run."""
+    from lib.plugins import load_agent_type
+
+    if not settings.agents:
+        return {}
+    agent_id, agent_cfg = next(iter(settings.agents.items()))
+    agent_type = (agent_cfg or {}).get("agent_type", "")
+    required: list[str] = []
+    if agent_type:
+        try:
+            settings_cls = load_agent_type(agent_type).settings_cls
+            required = list(getattr(settings_cls, "REQUIRED_ENV", ()))
+        except (ImportError, AttributeError):
+            pass  # unknown agent type — report it without credential info
+    env = read_env() | {k: v for k, v in os.environ.items() if k in required}
+    return {
+        "agent_id": agent_id,
+        "agent_type": agent_type,
+        "required_env": required,
+        "missing_env": [k for k in required if not env.get(k)],
+    }
 
 
 def inputs_status() -> list[dict[str, Any]]:

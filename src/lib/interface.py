@@ -3,59 +3,27 @@
 Channels that are bidirectional (socket, email, telegram, web_chat)
 subclass this. Receive-only feeds (imessage, calendars, file watchers)
 subclass `lib.source.Source` directly.
+
+The only difference is `send()`. The agent-facing surface (`poll`, `send`,
+`emit_pending`) is generated in `src/tools/<name>.py` via
+`lib.tools.interface_tools`, which keys off this class to decide whether a
+channel gets a send tool at all.
 """
 
 from __future__ import annotations
 
-import logging
-from typing import Any
-
-from claude_agent_sdk import SdkMcpTool, tool
-
-from lib.source import (
-    Message,
-    Source,
-    ToolArgs,
-    ToolResult,
-    Trigger,
-    _derive_schema,
-    _error,
-)
-
-log = logging.getLogger(__name__)
+from lib.source import Message, Source, Trigger
 
 
 class Interface(Source):
     """A Source that also has an outbound path. Subclasses implement
-    `send()`; the MCP tools gain a `{name}_send` in addition to the
-    inherited `{name}_receive`."""
+    `send()`, returning a short status string for the tool result."""
 
     async def send(self, message: Message) -> str:
         del message
         raise NotImplementedError
 
-    def tools(self) -> list[SdkMcpTool[Any]]:
-        iface_name = self.name
-        msg_cls = self.message_class
-        send_fn = self.send
-        schema = _derive_schema(msg_cls)
-
-        @tool(
-            f"{iface_name}_send",
-            f"Send a message via the {iface_name} interface.",
-            schema,
-        )
-        async def send_tool(args: ToolArgs) -> ToolResult:
-            try:
-                status = await send_fn(msg_cls(**args))
-            except Exception as e:
-                log.exception("%s_send failed", iface_name)
-                return _error(f"send failed: {e}")
-            return {"content": [{"type": "text", "text": status or "sent"}]}
-
-        return [*super().tools(), send_tool]
-
 
 # Re-exports so `from lib.interface import Interface, Message, Trigger`
 # (the pattern every existing interface file uses) keeps working.
-__all__ = ["Interface", "Message", "Trigger"]
+__all__ = ["Interface", "Message", "Source", "Trigger"]

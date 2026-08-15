@@ -12,6 +12,20 @@ name = ""
 [agents.primary]
 agent_type = "claude"
 rotation_time = "03:00"
+# Which tool modules from src/tools/ this agent may use — its entire reach
+# into the outside world. Omit to take the agent type's default (every
+# channel, plus poll/session/status/cron). Modules whose channel is disabled
+# contribute nothing, so listing extras is harmless.
+#   tools = ["poll", "telegram", "session", "status", "cron"]
+
+# Gemini alternative (needs GEMINI_API_KEY in .env). Brings no toolset of its
+# own, so it also loads `bash` — see its TOOLS default. Unlike the claude type
+# it persists the whole transcript in /state/<agent_id>/agent.json, so
+# continuity survives a rebuild.
+#   agent_type = "gemini"
+#   model = "gemini-3.7-flash"
+#   max_turns = 12        # bound on the tool-calling loop per wake
+#   history_turns = 60    # conversation entries retained across wakes
 
 [dashboard]
 enabled = true
@@ -45,15 +59,17 @@ poll_timeout = 30
 
 # Receive-only inputs (no `send` path) live under [sources.*].
 # wake_on_event=false keeps a source passive: it runs in the background and
-# buffers state, but the agent only sees it when it polls {name}_receive
-# after being woken by something else. Set true to wake on every new event.
+# buffers state, but the agent only sees it when it polls (`<name>.poll`, or
+# `poll.poll_all`) after being woken by something else. Set true to wake on
+# every new event.
 # Defaults differ per source — imessage is passive, cron wakes by design.
 [sources.imessage]
 enabled = false
 wake_on_event = false
 db_path = "/mnt/imessage/chat.db"
 
-# Agent-schedulable wakes (cron_wake_in / _at / _daily MCP tools).
+# Agent-schedulable wakes (the `cron` tool module: wake_in / wake_at /
+# wake_daily / list / cancel).
 # The caps bound how much the agent can spend on self-scheduled wakes.
 [sources.cron]
 enabled = false

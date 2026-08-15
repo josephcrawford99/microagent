@@ -2,11 +2,12 @@
 
 Each wake:
   - Reloads the soul prompt so edits take effect immediately.
-  - Exposes all interfaces' receive/send tools via an in-process MCP server,
-    plus a `session_idle` tool the agent calls when the conversation has
-    naturally concluded.
+  - Builds this agent's tool modules (see `AgentType.TOOLS` / `src/tools/`)
+    and registers each one as its own in-process MCP server, so the agent
+    sees them namespaced: `mcp__telegram__send`, `mcp__poll__poll_all`.
   - Grants the full Claude Code toolset with /space as cwd so the agent can
-    keep notes / task lists / pages across wakes.
+    keep notes / task lists / pages across wakes. (That's why it doesn't load
+    `tools/bash.py` — it already has Bash.)
   - Resumes the prior session for continuity, but rotates to a fresh session
     once per day (after `agents.<id>.rotation_time`) — only if the previous
     wake ended with `session_idle`, to avoid cutting a live conversation.
@@ -19,7 +20,6 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from claude_agent_sdk import (
@@ -46,22 +46,37 @@ from claude_agent_sdk.types import RateLimitEvent
 from pydantic import Field, SecretStr
 
 from lib.agent import AgentSettings, AgentType
+from lib.paths import SPACE_DIR
 from lib.state import ComponentState
+from lib.tools import ToolSpec
+from tools.status import set_pending
 
 if TYPE_CHECKING:
     from lib.interface import Trigger
     from lib.settings import RootConfig
+    from lib.tools import ToolContext
 
 log = logging.getLogger(__name__)
 
 DEFAULT_ROTATION_TIME = "03:00"
-AGENT_CWD = "/space"
-SOUL_PATH = Path("/config/soul.md")
 
 
-def _load_soul() -> str:
-    """Read /config/soul.md. Empty string if missing."""
-    return SOUL_PATH.read_text().strip() if SOUL_PATH.exists() else ""
+def _mcp_servers(
+    tools_by_module: dict[str, list[ToolSpec]]
+) -> dict[str, McpServerConfig]:
+    """Adapt provider-neutral ToolSpecs (lib.tools) into claude-agent-sdk MCP
+    servers, one per tool module — that's what namespaces the bare tool names
+    into `mcp__<module>__<tool>`. This module is the only place in the harness
+    that knows about claude_agent_sdk; everything upstream speaks ToolSpec."""
+    out: dict[str, McpServerConfig] = {}
+    for module, specs in tools_by_module.items():
+        sdk_tools: list[SdkMcpTool[Any]] = [
+            tool(s.name, s.description, s.params)(s.handler) for s in specs
+        ]
+        out[module] = create_sdk_mcp_server(
+            name=module, version="1.0.0", tools=sdk_tools
+        )
+    return out
 
 
 class ClaudeSettings(AgentSettings):
@@ -77,6 +92,20 @@ class ClaudeSettings(AgentSettings):
 
 class Claude(AgentType):
     name = "claude"
+    settings_cls = ClaudeSettings
+    # No `bash` — Claude Code's own toolset already covers the filesystem and
+    # the shell. Channel modules self-drop when their channel is disabled.
+    TOOLS = (
+        "poll",
+        "telegram",
+        "email",
+        "socket",
+        "web_chat",
+        "imessage",
+        "session",
+        "status",
+        "cron",
+    )
 
     def __init__(self, agent_id: str, settings: "RootConfig", interfaces):
         super().__init__(agent_id, settings, interfaces)
@@ -93,7 +122,8 @@ class Claude(AgentType):
         return out
 
     async def on_wake(self, triggers: "list[Trigger]") -> None:
-        soul_prompt = _load_soul()
+        soul_prompt = self.load_soul()
+        SPACE_DIR.mkdir(parents=True, exist_ok=True)  # the SDK needs a real cwd
         cfg = ClaudeSettings(self.settings, agent_id=self.agent_id)
         rotation_time = _parse_rotation_time(cfg.rotation_time)
 
@@ -105,22 +135,13 @@ class Claude(AgentType):
         if rotated:
             prior_session = None
 
-        all_tools: list[SdkMcpTool[Any]] = []
-        for iface in self.interfaces:
-            all_tools.extend(iface.tools())
-        idle_flag = {"set": False}
-        all_tools.append(_make_idle_tool(idle_flag))
-
-        server = create_sdk_mcp_server(
-            name="interfaces", version="1.0.0", tools=all_tools
-        )
-        mcp_servers: dict[str, McpServerConfig] = {"interfaces": server}
+        tools_by_module, tool_ctx = self.build_tools(triggers, cfg.tools)
 
         options = ClaudeAgentOptions(
             system_prompt=soul_prompt,
-            mcp_servers=mcp_servers,
+            mcp_servers=_mcp_servers(tools_by_module),
             permission_mode="bypassPermissions",
-            cwd=AGENT_CWD,
+            cwd=str(SPACE_DIR),
             resume=prior_session,
             hooks={"Stop": [HookMatcher(hooks=[_make_space_stop_hook()])]},
         )
@@ -129,9 +150,11 @@ class Claude(AgentType):
         prompt = f"Woken. Active triggers: {summary}."
 
         log.info(
-            "claude wake | triggers=%s tools=%d resume=%s rotated=%s",
+            "claude wake | triggers=%s tools=%s resume=%s rotated=%s",
             summary,
-            len(all_tools),
+            ", ".join(
+                f"{m}({len(s)})" for m, s in tools_by_module.items()
+            ) or "none",
             prior_session or "none",
             rotated,
         )
@@ -142,7 +165,7 @@ class Claude(AgentType):
         try:
             async for msg in query(prompt=prompt, options=options):
                 self._log_stream_message(msg)
-                await self._emit_pending(msg, triggers)
+                await self._track_activity(msg, tool_ctx)
                 if isinstance(msg, SystemMessage):
                     sid = _extract_session_id(msg)
                     if sid:
@@ -159,13 +182,13 @@ class Claude(AgentType):
                 self._state.save({})
             raise
         finally:
-            await self._emit_idle(triggers)
+            await self.emit_idle(triggers)
             self._update_usage(last_result, last_rate_limit)
 
         effective_session = new_session or prior_session
         self._state.save({
             "session_id": effective_session,
-            "idle": idle_flag["set"],
+            "idle": bool(tool_ctx.flags.get("idle")),
             "last_rotation": (
                 date.today().isoformat() if rotated else state.get("last_rotation")
             ),
@@ -207,12 +230,12 @@ class Claude(AgentType):
                 "overage_status": info.overage_status,
             }
 
-    async def _emit_pending(
-        self, msg: object, triggers: "list[Trigger]"
-    ) -> None:
-        """Translate SDK stream events into indicate_pending() on the triggering
-        interfaces. Text blocks are skipped — once the agent is writing the reply,
-        the indicator is noise."""
+    async def _track_activity(self, msg: object, ctx: "ToolContext") -> None:
+        """Drive the live status indicator off the SDK stream, so it reflects
+        what the model is doing without the model having to narrate. The
+        implementation lives in tools/status.py — this is the same thing the
+        agent gets as `emit_pending`, just called on its behalf. Text blocks
+        are skipped: once the reply is being written, the indicator is noise."""
         note: str | None = None
         if isinstance(msg, AssistantMessage):
             for block in msg.content:
@@ -222,30 +245,8 @@ class Claude(AgentType):
                     note = f"using {block.name}"
                 if note:
                     break
-        if not note:
-            return
-        seen: set[int] = set()
-        for t in triggers:
-            iface = t.interface
-            if id(iface) in seen:
-                continue
-            seen.add(id(iface))
-            try:
-                await iface.indicate_pending(note)
-            except Exception:
-                log.exception("indicate_pending failed on %s", iface.name)
-
-    async def _emit_idle(self, triggers: "list[Trigger]") -> None:
-        seen: set[int] = set()
-        for t in triggers:
-            iface = t.interface
-            if id(iface) in seen:
-                continue
-            seen.add(id(iface))
-            try:
-                await iface.indicate_idle()
-            except Exception:
-                log.exception("indicate_idle failed on %s", iface.name)
+        if note:
+            await set_pending(ctx, note)
 
     def _log_stream_message(self, msg: object) -> None:
         if isinstance(msg, AssistantMessage):
@@ -327,24 +328,6 @@ def _make_space_stop_hook() -> HookCallback:
         }
 
     return _hook
-
-
-def _make_idle_tool(idle_flag: dict[str, bool]) -> SdkMcpTool[Any]:
-    @tool(
-        "session_idle",
-        "Mark the current conversation as complete. Call this when you have "
-        "nothing more to do and aren't expecting an immediate follow-up — the "
-        "daemon may then rotate to a fresh session at the next scheduled "
-        "rotation time. Don't call it if you just asked a question or are "
-        "mid-task; wait for the exchange to settle first.",
-        {},
-    )
-    async def session_idle_tool(args: dict[str, Any]) -> dict[str, Any]:
-        del args
-        idle_flag["set"] = True
-        return {"content": [{"type": "text", "text": "marked idle"}]}
-
-    return session_idle_tool
 
 
 Plugin = Claude
