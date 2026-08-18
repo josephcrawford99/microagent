@@ -1,0 +1,5 @@
+.git
+.venv
+.microagent
+__pycache__
+.env

@@ -6,22 +6,17 @@ services:
     ports:
       - "8765:8765"   # socket interface
       - "8767:8767"   # dashboard
-    env_file: ${XDG_CONFIG_HOME:-${HOME}/.config}/microagent/.env
     volumes:
-      - .:/repo                                        # source tree
-      - ${XDG_CONFIG_HOME:-${HOME}/.config}/microagent:/config  # config + .env + soul.md
-      - agent-state:/state                             # harness state
-      - agent-space:/space                             # agent scratch (cwd)
-      - ${HOME}/Library/Messages:/mnt/imessage:ro      # iMessage read-only feed
+      - .:/repo   # source tree + the .microagent home
+      # Uncomment on the iMessage host (macOS, needs Docker Full Disk Access),
+      # and set db_path = "/mnt/imessage/chat.db" in config.toml.
+      # - ${HOME}/Library/Messages:/mnt/imessage:ro
+    tmpfs:
+      - /repo/.microagent/run   # FIFOs don't work on macOS bind mounts
     environment:
-      # Claude CLI refuses --dangerously-skip-permissions as root; this env
-      # marks the process as sandboxed (the container is our sandbox) so
-      # permission_mode="bypassPermissions" works.
-      - IS_SANDBOX=1
+      - IS_SANDBOX=1   # lets the Claude CLI skip permissions as root
 
   # Optional: exposes the dashboard publicly via Cloudflare Tunnel.
-  # Set CLOUDFLARED_TOKEN in .env (from Cloudflare Zero Trust → Tunnels) and
-  # run `docker compose --profile public up -d` to start it.
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: microagent-cloudflared
@@ -31,7 +26,3 @@ services:
       - microagent
     profiles:
       - public
-
-volumes:
-  agent-state:
-  agent-space:

@@ -1,12 +1,5 @@
-# Runtime deps. Installed into the image by the Dockerfile, and into a venv
-# for host runs (see scripts/run_local.sh).
-#
-# Note: changing this file means the image must be rebuilt —
-# `docker compose up --build -d`. POST /api/update alone is not enough.
+# Runtime deps. Installed into the image by the Dockerfile; for host runs,
+# `pip install -r requirements.txt`.
 
-claude-agent-sdk>=0.1,<1
 google-genai>=1.0,<3
 python-dotenv>=1.0,<2
-pydantic>=2.7,<3
-pydantic-settings>=2.3,<3
-tomli-w>=1.0,<2

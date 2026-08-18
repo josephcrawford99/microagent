@@ -1,29 +1,54 @@
-"""Filesystem roots, env-overridable.
-
-Defaults are the container paths, so a Docker run behaves exactly as before.
-Set the `MICROAGENT_*` vars to run the daemon on a host — see
-`scripts/run_local.sh`.
-
-These are read once at import time, so anything that sets them (a shell
-export, or the bootstrap `load_dotenv()` in main.py) must run before the
-first `lib.*` import.
+"""One mutable directory: MICROAGENT_HOME (default <repo>/.microagent).
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
+from dotenv import dotenv_values
 
-def _root(var: str, default: str) -> Path:
-    return Path(os.getenv(var, default)).expanduser()
+REPO_DIR = Path(__file__).resolve().parents[2]  # src/lib/paths.py -> repo root
+
+# The repo-root .env may set MICROAGENT_HOME, so it loads before HOME resolves.
+# setdefault: a variable already in the environment always wins.
+for _k, _v in dotenv_values(REPO_DIR / ".env").items():
+    if _v is not None:
+        os.environ.setdefault(_k, _v)
+
+HOME = Path(os.getenv("MICROAGENT_HOME", str(REPO_DIR / ".microagent"))).expanduser()
+
+CONFIG_TOML = HOME / "config.toml"
+CONFIG_ENV = next(
+    (p for p in (HOME / ".env", REPO_DIR / ".env") if p.is_file()), HOME / ".env"
+)
+SOUL_PATH = HOME / "soul.md"
+STATE_DIR = HOME / "state"
+SPACE_DIR = HOME / "space"
+RUN_DIR = HOME / "run"  # ephemeral IPC; contents wiped each boot
+
+_DEFAULTS = REPO_DIR / "src" / "defaults"
 
 
-CONFIG_DIR = _root("MICROAGENT_CONFIG_DIR", "/config")
-STATE_DIR = _root("MICROAGENT_STATE_DIR", "/state")
-SPACE_DIR = _root("MICROAGENT_SPACE_DIR", "/space")
-REPO_DIR = _root("MICROAGENT_REPO_DIR", "/repo")
+def ensure_home() -> None:
+    """Create the home tree and seed config on first boot. Idempotent."""
+    for d in (STATE_DIR, SPACE_DIR, RUN_DIR):
+        d.mkdir(parents=True, exist_ok=True)
+    # Wipe run/'s contents; unlink symlinks rather than following them.
+    for p in RUN_DIR.iterdir():
+        if p.is_dir() and not p.is_symlink():
+            shutil.rmtree(p)
+        else:
+            p.unlink()
+    if not CONFIG_TOML.exists():
+        shutil.copy(_DEFAULTS / "config.default.toml", CONFIG_TOML)
+    if not SOUL_PATH.exists():
+        shutil.copy(_DEFAULTS / "soul.default.md", SOUL_PATH)
 
-CONFIG_TOML = CONFIG_DIR / "config.toml"
-CONFIG_ENV = CONFIG_DIR / ".env"
-SOUL_PATH = CONFIG_DIR / "soul.md"
+
+def write_atomic(path: Path, data: str | bytes) -> None:
+    """Write a file via tmp + rename so readers never see a partial write."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_bytes(data.encode() if isinstance(data, str) else data)
+    os.replace(tmp, path)

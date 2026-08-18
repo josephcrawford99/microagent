@@ -1,88 +1,53 @@
 #!/usr/bin/env python3
-"""Microagent daemon — event-driven wake loop.
-
-Each Source/Interface owns a background task/thread that pushes a Trigger
-onto a shared asyncio.Queue the moment it has work for the agent. The main
-loop awaits that queue
+"""Microagent daemon.
 """
 from __future__ import annotations
+
 import asyncio
 import logging
-from dotenv import load_dotenv
+import sys
+from pathlib import Path
 
-# Bootstrap: a repo-root .env can set MICROAGENT_CONFIG_DIR/STATE_DIR/SPACE_DIR
-# (plus local API keys) for host runs. No override — a real shell export wins.
-# Must precede every lib.* import; lib.paths reads the env at import time.
-load_dotenv()
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # run from anywhere
 
-from lib.paths import CONFIG_ENV
-# The config dir's .env is the source of truth for secrets, and does override,
-# so a rotation written by POST /api/env lands on the next restart.
-load_dotenv(CONFIG_ENV, override=True)
-
-from lib.agent import AgentType
-from lib.log import setup_logging
-from lib.plugins import load_agent_type
-from lib.settings import RootConfig, enabled_sources
-from lib.source import Trigger
-from dashboard import DashboardServer
+from dotenv import load_dotenv  # noqa: E402
+from agents.default import Agent  # noqa: E402
+from lib import paths  # noqa: E402
+from lib.log import setup_logging  # noqa: E402
+from lib.plugins import load_provider, load_service  # noqa: E402
+from lib.settings import Config  # noqa: E402
 
 log = logging.getLogger(__name__)
 
 
-def get_agent(settings: RootConfig) -> AgentType:
-    """Pick the first [agents.*] entry and build it with its inputs attached.
-    Multi-agent is config-only for now — extras in settings.agents are parsed
-    but ignored."""
-    if not settings.agents:
-        raise RuntimeError("no [agents.*] section in config.toml")
-    agent_id, agent_cfg = next(iter(settings.agents.items()))
-    agent_type = (agent_cfg or {}).get("agent_type")
-    if not agent_type:
-        raise RuntimeError(f"[agents.{agent_id}] is missing `agent_type`")
-    cls = load_agent_type(agent_type)
-    return cls(agent_id, settings, enabled_sources(settings))
-
-
 async def main() -> None:
+    paths.ensure_home()
+    load_dotenv(paths.CONFIG_ENV, override=True)
     setup_logging()
-    settings = RootConfig()
+    config = Config()
 
-    agent = get_agent(settings)
-    inputs = agent.interfaces
+    if not config.provider:
+        raise RuntimeError("[agents.<id>] is missing `provider` in config.toml")
+    provider = load_provider(config.provider)(config.agent_id, config.agent)
 
-    if settings.dashboard_enabled:
-        DashboardServer(settings=settings, agent=agent).start()
+    services = [
+        load_service(name)(config.agent_id, cfg)
+        for name, cfg in config.enabled_services().items()
+    ]
+    for svc in services:
+        await svc.start()
 
-    trigger_q: asyncio.Queue[Trigger] = asyncio.Queue()
-    for inp in inputs:
-        await inp.start(trigger_q)
+    if config.dashboard_enabled:
+        from dashboard import DashboardServer  # optional component
+
+        DashboardServer(config).start()
 
     log.info(
-        "microagent up | agent=%s (id=%s) inputs=%s dashboard=%s",
-        agent.name,
-        agent.agent_id,
-        [i.name for i in inputs],
-        settings.dashboard_enabled,
+        "microagent up | provider=%s (agent=%s) services=%s dashboard=%s",
+        provider.name, config.agent_id, [s.name for s in services],
+        config.dashboard_enabled,
     )
-
-    while True:
-        try:
-            triggers = [await trigger_q.get()]
-            # Coalesce any bursts that arrived while we were waking.
-            while True:
-                try:
-                    triggers.append(trigger_q.get_nowait())
-                except asyncio.QueueEmpty:
-                    break
-            deduped = list({id(t.interface): t for t in triggers}.values())
-            log.info(
-                "waking on %s",
-                ", ".join(t.interface.name for t in deduped),
-            )
-            await agent.wake(deduped)
-        except Exception:
-            log.exception("error in main loop")
+    await Agent(provider, services).run()
 
 
 if __name__ == "__main__":

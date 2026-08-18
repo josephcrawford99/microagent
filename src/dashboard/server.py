@@ -1,16 +1,4 @@
-"""Standalone HTTP control panel.
-
-Separate from the Interface abstraction — the dashboard is not a channel the
-agent talks through. It delegates all config I/O to `lib.settings` (imported
-as `cfg`), surfaces agent usage stats, and proxies chat to whichever
-interface on the agent satisfies the `ChatView` protocol.
-
-Auth model:
-  - Direct LAN hits (no CF-Connecting-IP header) are trusted as "owner".
-  - Requests via Cloudflare Tunnel require a token. The cookie / bearer value
-    is compared against two configured tokens to derive a role:
-      DASHBOARD_TOKEN          → role=owner (full read/write)
-      DASHBOARD_DEMO_TOKEN     → role=demo  (empty reads, writes are no-ops)
+"""Standalone HTTP viewer.
 """
 
 from __future__ import annotations
@@ -22,78 +10,55 @@ import json
 import logging
 import mimetypes
 import os
-import posixpath
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from sources.interfaces.web_chat import ChatView
 from lib import settings as cfg
-from lib.paths import REPO_DIR, SPACE_DIR as _SPACE_DIR
-from lib.settings import RootConfig
+from lib.handle import Handle, describe_tree, parse_line
+from lib.message import ADDRESS, Message
+from lib.paths import CONFIG_TOML, REPO_DIR, SPACE_DIR
+from lib.plugins import load_provider, load_service
+from lib.settings import Config
 
-from .templates import LOGIN_HTML, PAGE_HTML
+from .templates import LOGIN_HTML, PAGE_HTML, SPACE_EMPTY_HTML
 
 log = logging.getLogger(__name__)
 
 COOKIE_NAME = "dash_token"
-SPACE_DIR = str(_SPACE_DIR)
-REPO = str(REPO_DIR)
+CHAT_TAIL_MAX = 64 * 1024  # cap how much web_chat/log a poll will read
+CHARSET_TYPES = frozenset({"application/json", "application/javascript"})
 
 
-class DashboardServer:
-    """Owns the HTTP server thread. Not an Interface."""
+class DashboardServer(ThreadingHTTPServer):
+    """The HTTP server plus the config and tokens its handlers read."""
 
-    def __init__(
-        self,
-        settings: RootConfig,
-        agent,  # AgentType — avoids a cycle-y import
-    ) -> None:
-        self.settings = settings
-        self.agent = agent
-        self.chat_view: Optional[ChatView] = next(
-            (i for i in agent.interfaces if isinstance(i, ChatView)), None
-        )
-        self.owner_token = (
-            settings.dashboard_token.get_secret_value()
-            if settings.dashboard_token
-            else ""
-        )
-        self.demo_token = (
-            settings.dashboard_demo_token.get_secret_value()
-            if settings.dashboard_demo_token
-            else ""
-        )
-        self.public_url = settings.dashboard_public_url
+    def __init__(self, config: Config, address: tuple[str, int] | None = None) -> None:
+        self.config = config
+        self.owner_token = os.environ.get("DASHBOARD_TOKEN", "")
+        chat_enabled = config.services.get("web_chat", {}).get("enabled")
+        self.chat = Handle("web_chat") if chat_enabled else None
         if not self.owner_token:
             log.warning(
                 "dashboard has no DASHBOARD_TOKEN set; cloudflare requests will be rejected"
             )
+        super().__init__(
+            address or (config.dashboard_host, config.dashboard_port), _Handler
+        )
 
     def start(self) -> None:
-        host = self.settings.dashboard_host
-        port = self.settings.dashboard_port
-        srv = _DashboardHTTPServer((host, port), _Handler)
-        srv.dashboard = self  # type: ignore[attr-defined]
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        log.info("dashboard listening on %s:%s", host, port)
-
-
-class _DashboardHTTPServer(ThreadingHTTPServer):
-    dashboard: DashboardServer  # set right after construction
+        threading.Thread(target=self.serve_forever, daemon=True).start()
+        log.info("dashboard listening on %s:%s", *self.server_address[:2])
 
 
 # --- auth helpers ----------------------------------------------------------
 
 
 def _is_via_cloudflare(headers) -> bool:
-    return any(
-        h in headers
-        for h in ("CF-Connecting-IP", "Cf-Connecting-Ip", "cf-connecting-ip")
-    )
+    return "CF-Connecting-IP" in headers  # header lookup is case-insensitive
 
 
 def _get_cookie(headers, name: str) -> str:
@@ -108,108 +73,77 @@ def _get_cookie(headers, name: str) -> str:
         return ""
 
 
-def _resolve_space(url_path: str) -> Optional[str]:
-    """Safe file resolve under SPACE_DIR. Rejects traversal, symlink escape,
+def _resolve_space(url_path: str) -> Path | None:
+    """Safe file resolve under space/. Rejects traversal, symlink escape,
     non-files. Directory paths resolve to `index.html` inside."""
     rel = unquote(url_path[len("/space"):]).lstrip("/")
-    rel = posixpath.normpath(rel) if rel else ""
-    if rel.startswith("..") or rel.startswith("/"):
-        return None
-    if rel == ".":
-        rel = ""
-    candidate = os.path.join(SPACE_DIR, rel) if rel else SPACE_DIR
+    root = SPACE_DIR.resolve()
     try:
-        real = os.path.realpath(candidate)
+        real = (root / rel).resolve()
     except OSError:
         return None
-    root = os.path.realpath(SPACE_DIR)
-    if real != root and not real.startswith(root + os.sep):
+    if not real.is_relative_to(root):
         return None
-    if os.path.isdir(real):
-        real = os.path.join(real, "index.html")
-    if not os.path.isfile(real):
-        return None
-    return real
-
-
-_SPACE_EMPTY_HTML = """<!doctype html><meta charset="utf-8">
-<title>agent space</title>
-<style>body{font-family:system-ui;max-width:36rem;margin:4rem auto;padding:1rem;color:#555}</style>
-<h2>empty</h2>
-<p>The agent hasn't written anything here yet. Ask it to — this is its space to fill.</p>
-<p style="color:#888;font-size:.9rem">Path: <code>/space/index.html</code></p>
-""".encode("utf-8")
-
-
-def _exit_soon() -> None:
-    def _bye() -> None:
-        os._exit(0)
-
-    threading.Timer(0.5, _bye).start()
+    if real.is_dir():
+        real = real / "index.html"
+    return real if real.is_file() else None
 
 
 def _git_pull(branch: str = "main") -> str:
     """Make the repo dir byte-identical to origin/<branch>. Destructive: drops
-    tracked changes (reset --hard) and wipes every untracked or ignored
-    file (clean -fdx), including `__pycache__/`, `.env`, `.DS_Store`, and
-    any stray files the agent may have written. The canonical .env lives
-    in /config/ and is never touched."""
+    tracked changes (reset --hard) and wipes every untracked or ignored file
+    (clean -fdx) — except the microagent home, the venv, and a repo-root .env,
+    which hold everything durable."""
     subprocess.run(
-        ["git", "-C", REPO, "fetch", "origin", branch],
+        ["git", "-C", REPO_DIR, "fetch", "origin", branch],
         check=True, capture_output=True,
     )
     subprocess.run(
-        ["git", "-C", REPO, "reset", "--hard", f"origin/{branch}"],
+        ["git", "-C", REPO_DIR, "reset", "--hard", f"origin/{branch}"],
         check=True, capture_output=True,
     )
     subprocess.run(
-        ["git", "-C", REPO, "clean", "-fdx"],
+        ["git", "-C", REPO_DIR, "clean", "-fdx",
+         "-e", ".microagent", "-e", ".venv", "-e", ".env", "-e", ".claude"],
         check=True, capture_output=True,
     )
     return subprocess.run(
-        ["git", "-C", REPO, "rev-parse", "--short", "HEAD"],
+        ["git", "-C", REPO_DIR, "rev-parse", "--short", "HEAD"],
         check=True, capture_output=True, text=True,
     ).stdout.strip()
+
+
+def _required_env(loader, name: str) -> list[str]:
+    try:
+        return list(loader(name).REQUIRED_ENV)
+    except ImportError:
+        return []
 
 
 # --- request handler -------------------------------------------------------
 
 
 class _Handler(BaseHTTPRequestHandler):
-    server: _DashboardHTTPServer  # for type narrowing
+    server: DashboardServer  # for type narrowing
 
     def log_message(self, fmt, *args):
         msg = fmt % args
-        if "/api/chat/poll" in msg:
+        if "/api/chat/poll" in msg or "/api/handles" in msg:
             return  # ~1/s per open tab, drowns everything else
         log.info("%s - %s", self.address_string(), msg)
 
-    @property
-    def dash(self) -> DashboardServer:
-        return self.server.dashboard
-
-    # --- auth ---
-
-    def _role(self) -> Optional[str]:
-        """Return "owner" | "demo" | None (unauth)."""
+    def _authorized(self) -> bool:
+        """LAN requests are trusted; cloudflare requests need the owner token
+        (cookie from /login, or a bearer header for the API)."""
         if not _is_via_cloudflare(self.headers):
-            return "owner"  # LAN trusted
+            return True
         supplied = _get_cookie(self.headers, COOKIE_NAME)
         if not supplied:
             auth = self.headers.get("Authorization", "")
             if auth.startswith("Bearer "):
-                supplied = auth[len("Bearer ") :]
-        if not supplied:
-            return None
-        if self.dash.owner_token and hmac.compare_digest(
-            self.dash.owner_token, supplied
-        ):
-            return "owner"
-        if self.dash.demo_token and hmac.compare_digest(
-            self.dash.demo_token, supplied
-        ):
-            return "demo"
-        return None
+                supplied = auth[len("Bearer "):]
+        token = self.server.owner_token
+        return bool(token and supplied and hmac.compare_digest(token, supplied))
 
     # --- response helpers ---
 
@@ -218,15 +152,13 @@ class _Handler(BaseHTTPRequestHandler):
         status: int,
         body: bytes,
         ctype: str = "text/html; charset=utf-8",
-        extra: Optional[list[tuple[str, str]]] = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        # Dashboard HTML/JSON is dynamic by nature; cached copies after a
-        # server rebuild leave tabs out of sync with the running process.
         self.send_header("Cache-Control", "no-store")
-        for k, v in extra or []:
+        for k, v in (headers or {}).items():
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
@@ -243,231 +175,179 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/healthz":
-            self._json(200, {"ok": True})
-            return
-        role = self._role()
-        if path in ("/", "/login"):
-            if role is None:
-                self._login_page()
-                return
-            self._send(200, PAGE_HTML.encode())
-            return
-        if role is None:
+            return self._json(200, {"ok": True})
+        if not self._authorized():
             if path.startswith("/api/"):
-                self._json(401, {"error": "unauthorized"})
-            else:
-                self._login_page()
-            return
+                return self._json(401, {"error": "unauthorized"})
+            return self._login_page()
+        if path in ("/", "/login"):
+            return self._send(200, PAGE_HTML.encode())
         if path == "/api/bootstrap":
-            self._bootstrap(role)
-            return
+            return self._bootstrap()
+        if path == "/api/handles":
+            return self._json(200, describe_tree())
         if path == "/api/chat/poll":
-            self._chat_poll(role)
-            return
-        if path == "/api/usage":
-            self._json(200, {} if role == "demo" else self.dash.agent.get_usage())
-            return
+            return self._chat_poll()
         if path == "/space" or path.startswith("/space/"):
-            self._serve_space(path)
-            return
+            return self._serve_space(path)
         self._send(404, b"not found", "text/plain")
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
         if path == "/login":
-            self._login_submit()
-            return
-        role = self._role()
-        if role is None:
-            self._json(401, {"error": "unauthorized"})
-            return
-        if role == "demo":
-            # Every write endpoint is a no-op in demo mode.
-            self._json(200, {"ok": True, "demo": True})
-            return
-
+            return self._login_submit()
+        if not self._authorized():
+            return self._json(401, {"error": "unauthorized"})
         body = self._read_body()
         if path == "/api/env":
-            try:
-                payload = json.loads(body)
-                new: dict[str, str] = {}
-                for row in payload.get("entries", []):
-                    k = row.get("key", "").strip()
-                    if not k:
-                        continue
-                    new[k] = row.get("value", "")
-                cfg.write_env(new)
-                self._json(200, {"ok": True})
-            except Exception as e:
-                log.exception("env save failed")
-                self._json(400, {"error": str(e)})
-            return
-        if path == "/api/config":
-            try:
-                cfg.write_toml_text(body.decode("utf-8"))
-                self._json(200, {"ok": True})
-            except Exception as e:
-                log.exception("config save failed")
-                self._json(400, {"error": str(e)})
-            return
-        if path == "/api/interface/toggle":
-            try:
-                payload = json.loads(body)
-                cfg.toggle(payload.get("name", ""), bool(payload.get("enabled", False)))
-                self._json(200, {"ok": True})
-            except Exception as e:
-                log.exception("interface toggle failed")
-                self._json(400, {"error": str(e)})
-            return
-        if path == "/api/source/wake_toggle":
-            try:
-                payload = json.loads(body)
-                cfg.set_wake(payload.get("name", ""), bool(payload.get("enabled", False)))
-                self._json(200, {"ok": True})
-            except Exception as e:
-                log.exception("source wake toggle failed")
-                self._json(400, {"error": str(e)})
-            return
-        if path == "/api/interface/field":
-            try:
-                payload = json.loads(body)
-                coerced = cfg.set_field(
-                    payload.get("name", ""),
-                    payload.get("field", ""),
-                    payload.get("value", []),
-                )
-                self._json(200, {"ok": True, "value": coerced})
-            except ValueError as e:
-                self._json(400, {"error": str(e)})
-            except Exception as e:
-                log.exception("editable field write failed")
-                self._json(400, {"error": str(e)})
-            return
+            return self._env_save(body)
         if path == "/api/restart":
             self._json(200, {"ok": True})
-            _exit_soon()
-            return
+            return self._exit_soon()
         if path == "/api/update":
-            try:
-                sha = _git_pull()
-                self._json(200, {"ok": True, "sha": sha})
-                _exit_soon()
-            except subprocess.CalledProcessError as e:
-                stderr = (e.stderr or b"").decode(errors="replace")
-                log.error("update failed: %s", stderr)
-                self._json(500, {"error": stderr or str(e)})
-            except Exception as e:
-                log.exception("update failed")
-                self._json(500, {"error": str(e)})
-            return
+            return self._update()
         if path == "/api/chat/send":
-            try:
-                payload = json.loads(body)
-                if self.dash.chat_view is None:
-                    self._json(400, {"error": "chat view not available"})
-                    return
-                self.dash.chat_view.submit(payload.get("body", ""))
-                self._json(200, {"ok": True})
-            except Exception as e:
-                self._json(400, {"error": str(e)})
-            return
+            return self._chat_send(body)
         self._send(404, b"not found", "text/plain")
 
     # --- route impls ---
 
-    def _bootstrap(self, role: str) -> None:
-        if role == "demo":
-            self._json(200, {
-                "role": "demo",
-                "env": {},
-                "config_toml": "",
-                "interfaces": [],
-                "agent": {},
-                "usage": {},
-                "public_url": self.dash.public_url,
+    @staticmethod
+    def _exit_soon() -> None:
+        # Docker's restart policy respawns the process.
+        threading.Timer(0.5, os._exit, args=(0,)).start()
+
+    def _env_save(self, body: bytes) -> None:
+        try:
+            entries = json.loads(body).get("entries", [])
+            cfg.write_env({
+                k: row.get("value", "")
+                for row in entries
+                if (k := row.get("key", "").strip())
             })
-            return
+            self._json(200, {"ok": True})
+        except Exception as e:
+            log.exception("env save failed")
+            self._json(400, {"error": str(e)})
+
+    def _update(self) -> None:
+        try:
+            sha = _git_pull()
+            self._json(200, {"ok": True, "sha": sha})
+            self._exit_soon()
+        except subprocess.CalledProcessError as e:
+            stderr = (e.stderr or b"").decode(errors="replace")
+            log.error("update failed: %s", stderr)
+            self._json(500, {"error": stderr or str(e)})
+        except Exception as e:
+            log.exception("update failed")
+            self._json(500, {"error": str(e)})
+
+    def _bootstrap(self) -> None:
+        env = cfg.read_env()
+        config = self.server.config
+        services = []
+        for name, section in config.services.items():
+            required = _required_env(load_service, name)
+            services.append({
+                "name": name,
+                "enabled": bool(section.get("enabled", False)),
+                "wake": bool(section.get("wake", True)),
+                "required_env": required,
+                "missing_env": [k for k in required if not env.get(k)],
+            })
+        required = _required_env(load_provider, config.provider)
+        agent_env = env | {k: v for k, v in os.environ.items() if k in required}
         self._json(200, {
-            "role": "owner",
-            "env": cfg.read_env(),
-            "config_toml": cfg.read_toml_text(),
-            "interfaces": cfg.inputs_status(),
-            "agent": cfg.agent_status(self.dash.settings),
-            "usage": self.dash.agent.get_usage(),
-            "public_url": self.dash.public_url,
+            "env": env,
+            "config_toml": CONFIG_TOML.read_text() if CONFIG_TOML.exists() else "",
+            "services": services,
+            "agent": {
+                "agent_id": config.agent_id,
+                "provider": config.provider,
+                "required_env": required,
+                "missing_env": [k for k in required if not agent_env.get(k)],
+            },
         })
 
-    def _chat_poll(self, role: str) -> None:
-        if role == "demo" or self.dash.chat_view is None:
-            self._json(200, {"messages": [], "latest": 0, "pending": {"note": None, "id": 0}})
-            return
+    # --- chat over the web_chat handles ---
+
+    def _chat_poll(self) -> None:
+        """Tail web_chat/log from a byte offset. Lines with `from` are user
+        messages; lines with `address` are agent replies."""
+        chat = self.server.chat
+        if chat is None:
+            return self._json(200, {"messages": [], "offset": 0})
         try:
             after = int(parse_qs(urlparse(self.path).query).get("after", ["0"])[0])
         except ValueError:
             after = 0
-        self._json(200, self.dash.chat_view.get_log(after))
+        messages: list[dict[str, Any]] = []
+        offset = after
+        try:
+            if chat.log_path.stat().st_size < after:
+                after = 0  # log was truncated/recreated; start over
+            with chat.log_path.open("rb") as f:
+                f.seek(after)
+                data = f.read(CHAT_TAIL_MAX)
+            offset = after + len(data)
+            for line in data.splitlines():
+                if not line.strip():
+                    continue
+                m = parse_line(line)
+                messages.append({
+                    "role": "agent" if ADDRESS in m else "user",
+                    "body": m.get("body", ""),
+                    "ts": m.get("ts", ""),
+                })
+        except FileNotFoundError:
+            offset = 0
+        self._json(200, {"messages": messages, "offset": offset})
+
+    def _chat_send(self, body: bytes) -> None:
+        """Play the remote user: write the line to web_chat/out, mirrored to
+        the log, exactly like an external echo would."""
+        chat = self.server.chat
+        if chat is None:
+            return self._json(400, {"error": "web_chat service not enabled"})
+        try:
+            text = str(json.loads(body).get("body", "")).strip()
+            if text:
+                chat.write("out", Message("web_chat", "web", text), tee=True)
+            self._json(200, {"ok": True})
+        except Exception as e:
+            self._json(400, {"error": str(e)})
 
     def _serve_space(self, path: str) -> None:
         if path == "/space":
-            self._send(302, b"", extra=[("Location", "/space/")])
-            return
-        if path == "/space/" and not os.path.isfile(
-            os.path.join(SPACE_DIR, "index.html")
-        ):
-            self._send(200, _SPACE_EMPTY_HTML)
-            return
+            path = "/space/"
         resolved = _resolve_space(path)
-        if not resolved:
-            self._send(404, b"not found", "text/plain")
-            return
-        ctype, _ = mimetypes.guess_type(resolved)
-        ctype = ctype or "application/octet-stream"
-        if ctype.startswith("text/") or ctype in (
-            "application/json",
-            "application/javascript",
-        ):
+        if resolved is None:
+            if path == "/space/":
+                return self._send(200, SPACE_EMPTY_HTML.encode())
+            return self._send(404, b"not found", "text/plain")
+        ctype = mimetypes.guess_type(str(resolved))[0] or "application/octet-stream"
+        if ctype.startswith("text/") or ctype in CHARSET_TYPES:
             ctype += "; charset=utf-8"
         try:
-            body = Path(resolved).read_bytes()
+            body = resolved.read_bytes()
         except OSError:
-            self._send(404, b"not found", "text/plain")
-            return
+            return self._send(404, b"not found", "text/plain")
         self._send(200, body, ctype)
 
     # --- login page ---
 
     def _login_page(self, error: str = "") -> None:
-        demo_link = (
-            '<p class="demo">Or <a href="/login?demo=1">view the demo →</a></p>'
-            if self.dash.demo_token
-            else ""
-        )
-        body = (
-            LOGIN_HTML
-            .replace("{{error}}", html.escape(error))
-            .replace("{{demo_link}}", demo_link)
-            .encode()
-        )
-        # /login?demo=1 — a GET that auto-sets the demo cookie and redirects.
-        if urlparse(self.path).query == "demo=1" and self.dash.demo_token:
-            self._set_cookie_and_redirect(self.dash.demo_token)
-            return
-        self._send(200, body)
+        self._send(200, LOGIN_HTML.replace("{{error}}", html.escape(error)).encode())
 
     def _login_submit(self) -> None:
-        body = self._read_body().decode()
-        fields = parse_qs(body)
-        supplied = (fields.get("token") or [""])[0]
-        tokens = [
-            t for t in (self.dash.owner_token, self.dash.demo_token) if t
-        ]
-        if any(hmac.compare_digest(t, supplied) for t in tokens):
-            self._set_cookie_and_redirect(supplied)
-            return
+        supplied = (parse_qs(self._read_body().decode()).get("token") or [""])[0]
+        token = self.server.owner_token
+        if token and hmac.compare_digest(token, supplied):
+            cookie = f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict"
+            if _is_via_cloudflare(self.headers):
+                cookie += "; Secure"
+            return self._send(
+                302, b"", headers={"Location": "/", "Set-Cookie": cookie}
+            )
         self._login_page(error="invalid token")
-
-    def _set_cookie_and_redirect(self, token: str) -> None:
-        cookie = f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict"
-        if _is_via_cloudflare(self.headers):
-            cookie += "; Secure"
-        self._send(302, b"", extra=[("Location", "/"), ("Set-Cookie", cookie)])

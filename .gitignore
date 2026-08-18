@@ -3,6 +3,7 @@ __pycache__/
 .env
 .claude
 .DS_Store
-data/
 .venv
-local/
+.microagent/
+.pytest_cache
+plan.txt

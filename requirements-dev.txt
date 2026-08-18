@@ -1,0 +1,6 @@
+# Test/dev deps. `pip install -r requirements-dev.txt`, then `pytest`.
+
+-r requirements.txt
+pytest>=8
+pytest-asyncio>=0.25
+pytest-timeout>=2
