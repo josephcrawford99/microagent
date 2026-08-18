@@ -15,7 +15,7 @@ import stat as stat_mod
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, cast
 from asyncio import get_running_loop
 
 from lib.message import ADDRESS, SENDER, Message
@@ -34,12 +34,13 @@ def parse_line(raw: bytes | str) -> dict[str, str]:
     text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
     text = text.strip()
     try:
-        obj = json.loads(text)
-        if isinstance(obj, dict):
-            return {k: v if isinstance(v, str) else json.dumps(v) for k, v in obj.items()}
+        obj: object = json.loads(text)
     except json.JSONDecodeError:
-        pass
-    return {"body": text}
+        return {"body": text}
+    if not isinstance(obj, dict):
+        return {"body": text}
+    items = cast(dict[str, object], obj).items()  # JSON object keys are always str
+    return {k: v if isinstance(v, str) else json.dumps(v) for k, v in items}
 
 
 def _encode(msg: dict[str, str]) -> bytes:
@@ -67,17 +68,15 @@ class Handle:
                 os.mkfifo(fifo, 0o600)
 
     def add_reader(
-        self,
-        which: Literal["in", "out"],
-        callback: Callable[[Message], None],
-        *,
-        tee: bool = False,
+        self, which: Literal["in", "out"], callback: Callable[[Message], None]
     ) -> int:
         """Register a per-line callback on the event loop for one FIFO.
         Opens as the sole reader (O_RDWR keeps the FIFO from ever hitting EOF).
         Buffers partial lines; each complete line is parsed to a Message.
-        `tee` appends the raw envelope to the log before the callback sees it."""
+        Reads from `in` are mirrored to the log, which catches external
+        writers that bypass write(); `out` lines were logged at write time."""
         loop = get_running_loop()
+        tee = which == "in"
         fd = os.open(self.path / which, os.O_RDWR | os.O_NONBLOCK)
         buf = bytearray()
 
@@ -106,14 +105,13 @@ class Handle:
         loop.add_reader(fd, on_readable)
         return fd
 
-    def write(
-        self, which: Literal["in", "out"], msg: Message, *, tee: bool = False
-    ) -> bool:
-        """Send one message down a FIFO. `tee` mirrors the same encoded line
-        to the log, kept even when no reader takes the FIFO write."""
+    def write(self, which: Literal["in", "out"], msg: Message) -> bool:
+        """Send one message down a FIFO. Writes to `out` are mirrored to the
+        log, kept even when no reader takes the FIFO write; `in` lines are
+        logged by the sole reader instead."""
         data = _encode(msg.to_wire(WIRE_KEY[which]))
         ok = self._write_fifo(which, data)
-        if tee:
+        if which == "out":
             with self.log_path.open("ab") as f:
                 f.write(data)
         return ok

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, cast, overload
 
 from lib.paths import STATE_DIR as STATE_ROOT, write_atomic
 
@@ -29,7 +29,14 @@ class ComponentState:
         except (OSError, json.JSONDecodeError):
             log.exception("failed to load %s; using default", self._path)
             return dict(default)
-        return data if isinstance(data, dict) else dict(default)
+        if not isinstance(data, dict):
+            return dict(default)
+        return cast(dict[str, Any], data)  # JSON object keys are always str
+
+    @overload
+    def get_int(self, key: str) -> int | None: ...
+    @overload
+    def get_int(self, key: str, default: int) -> int: ...
 
     def get_int(self, key: str, default: int | None = None) -> int | None:
         """One int field out of the state file, tolerating garbage."""

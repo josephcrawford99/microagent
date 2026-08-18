@@ -79,7 +79,7 @@ class BaseAgent(ABC):
 
     async def run(self) -> None:
         """Main agent harness loop"""
-        self.handle.add_reader("in", partial(self.receive, True), tee=True)
+        self.handle.add_reader("in", partial(self.receive, True))
         for svc in self.services:
             svc.handle.add_reader("out", partial(self.receive, svc.wake))
         log.info(
@@ -119,7 +119,7 @@ class BaseAgent(ABC):
         `agent` land on the harness's own `out` handle. Raises on anything
         the channel won't take; callers log and move on."""
         if msg.channel == "agent":
-            self.handle.write("out", msg, tee=True)
+            self.handle.write("out", msg)
             return
         svc = self.get_service(msg.channel)
         if svc is None:

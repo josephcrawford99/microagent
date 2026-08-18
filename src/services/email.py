@@ -81,7 +81,7 @@ class Email(Service):
     def _split_subject(body: str) -> tuple[str, str]:
         """Peel a leading `Subject:` line off the body. Missing header means
         the whole thing is the message — never a hard failure."""
-        head, sep, rest = body.partition("\n")
+        head, _, rest = body.partition("\n")
         if not head.lower().startswith("subject:"):
             return "(no subject)", body
         return head[len("subject:"):].strip() or "(no subject)", rest.lstrip("\n")
@@ -121,10 +121,7 @@ class Email(Service):
         first = msg_data[0]
         if not isinstance(first, tuple) or len(first) < 2:
             return None
-        raw = first[1]
-        if not isinstance(raw, (bytes, bytearray)):
-            return None
-        return email.message_from_bytes(bytes(raw), policy=policy.default)
+        return email.message_from_bytes(first[1], policy=policy.default)
 
     @staticmethod
     def _extract_body(parsed: StdEmailMessage) -> str:

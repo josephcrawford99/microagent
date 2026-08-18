@@ -12,9 +12,11 @@ import mimetypes
 import os
 import subprocess
 import threading
+from collections.abc import Callable
+from email.message import Message as Headers
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from lib import settings as cfg
@@ -25,6 +27,10 @@ from lib.plugins import load_provider, load_service
 from lib.settings import Config
 
 from .templates import LOGIN_HTML, PAGE_HTML, SPACE_EMPTY_HTML
+
+if TYPE_CHECKING:
+    from providers.base_provider import Provider
+    from services.base_service import Service
 
 log = logging.getLogger(__name__)
 
@@ -54,14 +60,11 @@ class DashboardServer(ThreadingHTTPServer):
         log.info("dashboard listening on %s:%s", *self.server_address[:2])
 
 
-# --- auth helpers ----------------------------------------------------------
-
-
-def _is_via_cloudflare(headers) -> bool:
+def _is_via_cloudflare(headers: Headers) -> bool:
     return "CF-Connecting-IP" in headers  # header lookup is case-insensitive
 
 
-def _get_cookie(headers, name: str) -> str:
+def _get_cookie(headers: Headers, name: str) -> str:
     raw = headers.get("Cookie", "")
     if not raw:
         return ""
@@ -113,21 +116,20 @@ def _git_pull(branch: str = "main") -> str:
     ).stdout.strip()
 
 
-def _required_env(loader, name: str) -> list[str]:
+def _required_env(
+    loader: Callable[[str], type[Service] | type[Provider]], name: str
+) -> list[str]:
     try:
         return list(loader(name).REQUIRED_ENV)
     except ImportError:
         return []
 
 
-# --- request handler -------------------------------------------------------
-
-
 class _Handler(BaseHTTPRequestHandler):
-    server: DashboardServer  # for type narrowing
+    server: DashboardServer  # pyright: ignore[reportIncompatibleVariableOverride]  # always constructed by DashboardServer
 
-    def log_message(self, fmt, *args):
-        msg = fmt % args
+    def log_message(self, format: str, *args: Any) -> None:
+        msg = format % args
         if "/api/chat/poll" in msg or "/api/handles" in msg:
             return  # ~1/s per open tab, drowns everything else
         log.info("%s - %s", self.address_string(), msg)
@@ -246,7 +248,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _bootstrap(self) -> None:
         env = cfg.read_env()
         config = self.server.config
-        services = []
+        services: list[dict[str, Any]] = []
         for name, section in config.services.items():
             required = _required_env(load_service, name)
             services.append({
@@ -313,7 +315,7 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             text = str(json.loads(body).get("body", "")).strip()
             if text:
-                chat.write("out", Message("web_chat", "web", text), tee=True)
+                chat.write("out", Message("web_chat", "web", text))
             self._json(200, {"ok": True})
         except Exception as e:
             self._json(400, {"error": str(e)})

@@ -23,16 +23,15 @@ class Config:
                 raw = tomllib.loads(CONFIG_TOML.read_text())
             except FileNotFoundError:
                 raw = {}
+        services: dict[str, Any] = raw.get("services") or {}
         self.services: dict[str, dict[str, Any]] = {
-            name: cfg
-            for name, cfg in (raw.get("services") or {}).items()
-            if isinstance(cfg, dict)
+            name: cfg for name, cfg in services.items() if isinstance(cfg, dict)
         }
         agents = raw.get("agents") or {"primary": {"provider": "ping"}}
         self.agent_id, agent_cfg = next(iter(agents.items()))
         self.agent: dict[str, Any] = agent_cfg or {}
         self.provider = str(self.agent.get("provider", ""))
-        dash = raw.get("dashboard") or {}
+        dash: dict[str, Any] = raw.get("dashboard") or {}
         self.dashboard_enabled = bool(dash.get("enabled", False))
         self.dashboard_host = str(dash.get("host", "0.0.0.0"))
         self.dashboard_port = int(dash.get("port", 8767))

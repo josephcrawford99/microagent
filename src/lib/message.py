@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from typing import cast
 
 log = logging.getLogger(__name__)
 
@@ -37,10 +38,6 @@ class Message:
         write these by hand, and a service should see a message with empty
         fields (and refuse it itself) rather than never see it."""
         return cls(channel, line.get(key, ""), line.get("body", ""))
-
-    def prompt_line(self) -> str:
-        """The one line the model sees for this message in a wake prompt."""
-        return f"[{self.channel}] from {self.address}: {self.body}"
 
 
 def parse_reply(reply: str) -> list[Message]:
@@ -77,7 +74,8 @@ def _message(obj: object) -> Message:
     envelope is the service's call, at delivery time."""
     if not isinstance(obj, dict):
         raise MessageError(f"not an object: {obj!r}")
-    return Message(_field(obj, "channel"), _field(obj, ADDRESS, ""), _field(obj, "body"))
+    fields = cast(dict[str, object], obj)  # JSON object keys are always str
+    return Message(_field(fields, "channel"), _field(fields, ADDRESS, ""), _field(fields, "body"))
 
 
 def _field(obj: dict[str, object], key: str, default: str | None = None) -> str:

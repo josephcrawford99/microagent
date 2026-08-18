@@ -1,10 +1,4 @@
-"""Telegram bot channel — HTTP-only, no extra deps.
-
-`allowed_chat_ids` is the cost-guard: only whitelisted chats reach the agent.
-Empty list denies everything. Watermark (highest consumed update_id + 1)
-persists via ComponentState under state/<agent_id>/telegram.json and
-advances at fetch time, before write_out — so a restart can't replay and there is
-no drain handshake."""
+"""Telegram bot channel. HTTP-only, no extra deps."""
 
 from __future__ import annotations
 
@@ -44,8 +38,9 @@ class Telegram(Service):
         # forever on the same disallowed update_id.
         self._advance_watermark(updates)
         for u in updates:
-            msg = u.get("message") or {}
-            chat_id = (msg.get("chat") or {}).get("id")
+            msg: dict[str, Any] = u.get("message") or {}
+            chat: dict[str, Any] = msg.get("chat") or {}
+            chat_id = chat.get("id")
             text = msg.get("text") or ""
             if chat_id not in self.allowed_chat_ids or not text:
                 continue

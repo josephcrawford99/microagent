@@ -44,7 +44,7 @@ class Service:
         self.config = config
         self.handle = Handle(self.name)
         self.secrets = {k: os.environ.get(k, "") for k in self.REQUIRED_ENV}
-        self._tasks: set[asyncio.Task] = set()
+        self._tasks: set[asyncio.Task[None]] = set()
 
     @cached_property
     def state(self) -> ComponentState:
@@ -68,7 +68,7 @@ class Service:
         """Start reading `in` (the handle dir itself exists since __init__),
         and run the poll loop when the subclass overrides `poll()` and no
         required env var is missing. `poll=False` skips the loop."""
-        self.handle.add_reader("in", self._on_in, tee=True)
+        self.handle.add_reader("in", self._on_in)
         if not poll or type(self).poll is Service.poll:
             return
         if missing := [k for k, v in self.secrets.items() if not v]:
@@ -76,7 +76,7 @@ class Service:
             return
         self.spawn(self._poll_loop())
 
-    def spawn(self, coro: Coroutine) -> asyncio.Task:
+    def spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         """Run a background coroutine, holding a strong reference so the
         event loop can't garbage-collect it mid-flight."""
         task = asyncio.get_running_loop().create_task(coro)
@@ -117,4 +117,4 @@ class Service:
 
     def write_out(self, *, sender: str, body: str) -> None:
         """Publish one inbound event on `out`, mirrored to the log."""
-        self.handle.write("out", Message(self.name, sender, body), tee=True)
+        self.handle.write("out", Message(self.name, sender, body))

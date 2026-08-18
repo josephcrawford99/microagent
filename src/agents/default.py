@@ -22,6 +22,11 @@ Available channels and the envelope each accepts:
 """
 
 
+def prompt_line(message: Message) -> str:
+    """The one line the model sees for one message in a wake prompt."""
+    return f"[{message.channel}] from {message.address}: {message.body}"
+
+
 class Agent(BaseAgent):
     def __init__(self, provider: Provider, services: list[Service]) -> None:
         super().__init__(provider, services)
@@ -33,7 +38,7 @@ class Agent(BaseAgent):
         """One wake of the agent"""
         log.info("waking on %s", ", ".join(batch.channels))
         preamble = self.soul() + self.contract  # before the provider call: no soul, no wake
-        messages = "\n".join(["New messages:", "", *(m.prompt_line() for m in batch)])
+        messages = "\n".join(["New messages:", "", *(prompt_line(m) for m in batch)])
         prompt = preamble + "\n\n" + messages
         log.debug("%s prompt:\n%s", self.provider.name, prompt)
         raw = await self.provider.generate(prompt)

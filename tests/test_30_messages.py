@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 
 from lib.message import ADDRESS, SENDER, Batch, Message, parse_reply
-from agents.default import Agent
+from agents.default import Agent, prompt_line
 from providers.ping import Ping
 from services.base_service import Service
 from services.cron import Cron
@@ -71,12 +71,16 @@ def test_from_wire_is_lenient():
     assert (msg.channel, msg.address, msg.body) == ("socket", "", "")
 
 
-def test_from_wire_and_prompt_line():
+def test_from_wire_ignores_extra_fields():
     msg = Message.from_wire("email", {
         "from": "a@b.c", "body": "hello", "ts": "2026-08-15T10:00:00",
     }, SENDER)
     assert msg == Message("email", "a@b.c", "hello")
-    assert msg.prompt_line() == "[email] from a@b.c: hello"
+
+
+def test_prompt_line():
+    msg = Message("email", "a@b.c", "hello")
+    assert prompt_line(msg) == "[email] from a@b.c: hello"
 
 
 def test_batch_channels_and_reply_to():

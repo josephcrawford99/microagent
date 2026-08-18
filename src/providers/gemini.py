@@ -41,7 +41,7 @@ class Gemini(Provider):
         )
         # wait_for guard: a hung request must not wedge the daemon.
         resp = await asyncio.wait_for(
-            client.aio.models.generate_content(
+            client.aio.models.generate_content(  # pyright: ignore[reportUnknownMemberType]  # SDK stubs are incomplete
                 model=self.model, contents=contents, config=config
             ),
             timeout=self.timeout,

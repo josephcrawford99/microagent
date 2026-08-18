@@ -156,7 +156,7 @@ class Cron(Service):
                 continue
             self._write_fire(s)
             fired += 1
-            if s.kind == "daily":
+            if s.kind == "daily" and s.time_of_day:
                 remaining.append(replace(s, fires_at=_next_daily(s.time_of_day, now)))
         self._schedules = remaining
         if fired:
@@ -178,7 +178,7 @@ class Cron(Service):
                 continue
             self._write_fire(s)
             fired += 1
-            if s.kind == "daily":
+            if s.kind == "daily" and s.time_of_day:
                 remaining.append(replace(s, fires_at=_next_daily(s.time_of_day, now)))
         if fired:
             self._schedules = remaining
