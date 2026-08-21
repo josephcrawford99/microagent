@@ -14,17 +14,43 @@ $ tail -f run/telegram/log                                        # watch a chan
 
 The interface is the filesystem. A **service** (telegram, email, socket, cron, ...) owns exactly one directory of handles. `in` (FIFO it consumes), `out` (FIFO it emits on), `log` (append-only mirror of both). That directory is its entire contract, so a service could become a separate process, or a shell script, without the harness noticing. The harness itself owns `run/agent/` in the same shape: a line on `in` wakes the agent, `out` carries anything the agent addresses to `agent`, and `log` mirrors both.
 
+Every service is the same two methods, and every provider is one. The harness reads each `out` and writes any `in`, and it never learns which service is which:
 
 ```mermaid
 flowchart LR
-    W[outside world] -->|poll| S[services/telegram.py]
-    S -->|write_out| O[run/telegram/out]
-    O --> H[agents/default.py<br/>batch, coalesce]
-    H -->|soul + contract + messages| P[providers/claude.py]
-    P -->|parse_reply| H
-    H -->|send| I[run/telegram/in]
-    I -->|handle_in| S
-    S --> W
+    subgraph SVC["src/services/, any number, all one shape"]
+        direction TB
+        T[telegram]
+        E[email]
+        K[socket]
+        C[cron]
+        X[more]
+    end
+
+    subgraph RUN["run/, one handle dir per service"]
+        direction TB
+        O[out]
+        I[in]
+        L[log]
+    end
+
+    A["src/agents/<br/>batch, coalesce, prompt, parse"]
+
+    subgraph PRV["src/providers/, one is picked in config.toml"]
+        direction TB
+        CL[claude]
+        GE[gemini]
+        PI[ping]
+    end
+
+    SVC -->|"write_out()"| O
+    O --> A
+    A --> I
+    I -->|"handle_in()"| SVC
+    A -->|"generate(prompt)"| PRV
+    PRV -->|"reply text"| A
+    O -.->|appended| L
+    I -.->|appended| L
 ```
 
 The LLM is strictly a text provider that takes input, does what it wishes, and responds with text. Tool calling and other behavior can be provided through an agent harness within the agents directory but the backbone of the harness is completely agnostic.
