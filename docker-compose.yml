@@ -7,12 +7,16 @@ services:
       - "8765:8765"   # socket interface
       - "8767:8767"   # dashboard
     volumes:
-      - .:/repo   # source tree + the .microagent home
+      - .:/microagent   # source tree + the .microagent home
       # Uncomment on the iMessage host (macOS, needs Docker Full Disk Access),
       # and set db_path = "/mnt/imessage/chat.db" in config.toml.
       # - ${HOME}/Library/Messages:/mnt/imessage:ro
     tmpfs:
-      - /repo/.microagent/run   # FIFOs don't work on macOS bind mounts
+      # run/ is ephemeral IPC, wiped every boot, so tmpfs is its natural
+      # backing store. It also keeps the FIFOs off the bind mount, which
+      # macOS needs: FIFOs don't work over virtiofs. The cost is that the
+      # handle tree is reachable through `docker exec`, not from the host.
+      - /microagent/.microagent/run
     environment:
       - IS_SANDBOX=1   # lets the Claude CLI skip permissions as root
 

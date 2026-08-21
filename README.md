@@ -1,6 +1,6 @@
 # microagent
 
-A tiny always-on personal assistant where **everything is a file(tm)**. Every channel the agent talks through (telegram, email, a TCP socket, cron) is just a directory of Unix IPC handles. Anything can write a line to a FIFO to send a message and the harness reads a FIFO to receive it. This is an experiment to try to get the most minimal extensible harness that is still featureful, and do so by hacking the features Unix provides.
+An autonomous, always-on agent harness where **everything is a file(tm)**. Every channel the agent talks through (telegram, email, a TCP socket, cron) is just a directory of Unix IPC handles. Anything can write a line to a FIFO to send a message and the harness reads a FIFO to receive it. This is an experiment to try to get the most minimal extensible harness that is still featureful, and do so by hacking the features Unix provides.
 
 ```
 $ cd .microagent                                                  # the home dir (all handles live in <home>/run/)
@@ -14,6 +14,19 @@ $ tail -f run/telegram/log                                        # watch a chan
 
 The interface is the filesystem. A **service** (telegram, email, socket, cron, ...) owns exactly one directory of handles. `in` (FIFO it consumes), `out` (FIFO it emits on), `log` (append-only mirror of both). That directory is its entire contract, so a service could become a separate process, or a shell script, without the harness noticing. The harness itself owns `run/agent/` in the same shape: a line on `in` wakes the agent, `out` carries anything the agent addresses to `agent`, and `log` mirrors both.
 
+
+```mermaid
+flowchart LR
+    W[outside world] -->|poll| S[services/telegram.py]
+    S -->|write_out| O[run/telegram/out]
+    O --> H[agents/default.py<br/>batch, coalesce]
+    H -->|soul + contract + messages| P[providers/claude.py]
+    P -->|parse_reply| H
+    H -->|send| I[run/telegram/in]
+    I -->|handle_in| S
+    S --> W
+```
+
 The LLM is strictly a text provider that takes input, does what it wishes, and responds with text. Tool calling and other behavior can be provided through an agent harness within the agents directory but the backbone of the harness is completely agnostic.
 
 So the three pluggable pieces are small and independent:
@@ -26,6 +39,14 @@ So the three pluggable pieces are small and independent:
 
 Each plugin is one file; the loader finds the Service or Provider subclass it defines (set `Plugin = ClassName` only if a module holds more than one). Read `src/services/socket.py` for the shortest complete example, and `src/lib/handle.py` for the FIFO mechanics.
 
+## Why FIFOs
+
+A FIFO is slower than a socket, and it carries less structure than a protocol like MCP. So why do I do this to myself? The trade is worth it for two reasons.
+
+1. You can drive the **whole** system from a shell. Writing to a channel is as easy as `echo >`. Watching a channel's output is `tail -f`. There is no broker to start and no client to build. This flexibility makes it a breeze to make a new plugin or test the system through its interfaces.
+
+2. You can also **look** at a file. When something goes wrong, read the `log` for that channel. You see what the harness saw, in order, with nothing to decode first.
+
 ## Run a microagent
 
 The following primarily is a setup for a claude code provider but is essentially the same for any pluggable llm provider
@@ -35,6 +56,8 @@ The following primarily is a setup for a claude code provider but is essentially
 `.microagent/config.toml` decides which agent, which provider, and which services you want:
 
 ```toml
+timezone = "America/New_York"  # clock for logs, cron dailies, and the agent
+
 [agents.primary]
 provider = "claude"          # "claude" | "gemini" | "ping" or any agent you add
 
@@ -89,4 +112,19 @@ docker compose run --rm -it microagent claude setup-token   # get an OAuth token
 docker compose up -d --build
 ```
 
+`run/` is a tmpfs inside the container, so the handle tree is reached from there rather than from the host: `docker exec microagent sh -c 'echo hi > /microagent/.microagent/run/agent/in'`. On a Linux host you can drop the `tmpfs:` line from `docker-compose.yml` to get host-visible FIFOs; on macOS you can't, because FIFOs don't work over the bind mount at all.
+
 The dashboard listens on port 8767 (on every interface by default; set `host = "127.0.0.1"` to keep it machine-local). It is a viewer over the handle tree plus a chat pane, and it can also act: restart, update to origin/main, and rotate .env keys.
+
+## Project retroactive
+
+The hard part was really making the base classes for the pluggable features. Extensibility is the point of the project, so a fat base class defeats the one feature it exists to give you. A developer who has to study `base_service.py` before writing a plugin won't write one.
+
+Most of the work was removal. The risk is a base class with several verbs that overlap, where the names don't tell you which one to use. `Service` now has one method you write, `handle_in()`, and one you call, `write_out()`. `Provider` has one method, `generate(prompt) -> str`. Everything else has a default.
+
+## Limitations
+
+- A FIFO exchange is slower and uses more context than a structured transport like MCP.
+- The handle tree applies to only one host. Separate agents run in separate places with no problem, but they do not share a tree.
+- Docker adds its own limits to what the agent can reach.
+- The Claude OAuth token is the roughest part of setup.

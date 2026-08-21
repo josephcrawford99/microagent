@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # run from anywhere
@@ -23,8 +25,14 @@ log = logging.getLogger(__name__)
 async def main() -> None:
     paths.ensure_home()
     load_dotenv(paths.CONFIG_ENV, override=True)
-    setup_logging()
     config = Config()
+    if config.timezone:
+        # os.environ, not just tzset(): the provider's subprocesses inherit it,
+        # so the agent's own clock agrees with the harness. Before logging, so
+        # timestamps are local too.
+        os.environ["TZ"] = config.timezone
+        time.tzset()
+    setup_logging()
 
     if not config.provider:
         raise RuntimeError("[agents.<id>] is missing `provider` in config.toml")

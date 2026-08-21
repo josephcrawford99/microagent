@@ -33,6 +33,25 @@ class Boom(Service):
         raise ValueError("nope")
 
 
+class Ticker(Service):
+    """A polling service, to check how the base loop is paced."""
+
+    name = "ticker_test"
+    poll_interval_s = 30.0
+
+    async def handle_in(self, msg):
+        pass
+
+    async def poll(self):
+        pass
+
+
+def test_poll_interval_defaults_to_the_subclass_and_config_overrides():
+    assert Ticker("t-tick", {}).poll_interval_s == 30.0
+    assert Ticker("t-tick", {"poll_interval_s": 0.5}).poll_interval_s == 0.5
+    assert Echo("t-echo", {}).poll_interval_s == 0.0, "base default for non-pollers"
+
+
 async def test_in_to_out_round_trip(harness):
     svc = Echo("t-echo", {})
     q = await harness(svc)

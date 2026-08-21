@@ -21,9 +21,10 @@ class Telegram(Service):
     name = "telegram"
     REQUIRED_ENV = ("TELEGRAM_BOT_TOKEN",)
     ADDRESS_HINT = "<chat id>"
-    # Server-side long-poll: `getUpdates?timeout=N` blocks on the API waiting
-    # for updates — near-zero traffic idle, ~RTT latency live.
-    poll_interval_s = 0.0
+    # No poll_interval_s override: the inherited 0.0 is right. `getUpdates`
+    # long-polls, so the fetch itself blocks on the API waiting for updates —
+    # near-zero traffic idle, ~RTT latency live. Sleeping after it would only
+    # add latency. `poll_timeout` below sets how long the server holds it.
 
     def __init__(self, agent_id: str, config: dict[str, Any]) -> None:
         super().__init__(agent_id, config)

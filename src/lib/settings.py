@@ -31,6 +31,7 @@ class Config:
         self.agent_id, agent_cfg = next(iter(agents.items()))
         self.agent: dict[str, Any] = agent_cfg or {}
         self.provider = str(self.agent.get("provider", ""))
+        self.timezone = str(raw.get("timezone", ""))
         dash: dict[str, Any] = raw.get("dashboard") or {}
         self.dashboard_enabled = bool(dash.get("enabled", False))
         self.dashboard_host = str(dash.get("host", "0.0.0.0"))

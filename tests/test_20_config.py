@@ -26,8 +26,10 @@ def test_config_accessors_from_raw():
             "bogus": "not a dict",
         },
         "dashboard": {"enabled": True, "host": "127.0.0.1", "port": 9999},
+        "timezone": "America/New_York",
     })
     assert cfg.agent_id == "main"
+    assert cfg.timezone == "America/New_York"
     assert cfg.provider == "gemini"
     assert cfg.agent["model"] == "m"
     assert set(cfg.services) == {"socket", "email"}, "non-dict sections dropped"
@@ -44,6 +46,7 @@ def test_config_defaults_when_empty():
     assert cfg.services == {}
     assert cfg.dashboard_enabled is False
     assert cfg.dashboard_host == "0.0.0.0"
+    assert cfg.timezone == "", "no timezone means whatever the host runs"
 
 
 def test_config_missing_file_is_empty(monkeypatch, home):

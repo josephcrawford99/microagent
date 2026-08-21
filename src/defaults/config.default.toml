@@ -1,5 +1,10 @@
 # microagent configuration. Everything non-secret lives here.
 
+# IANA name, e.g. "America/New_York". Empty = whatever the host runs (UTC in
+# docker). Sets the clock for logs, cron `daily` times, and the agent itself,
+# so DST is handled for you.
+timezone = ""
+
 # Currently additional agents beyond the first are parsed but ignored. Future will allow multi agent.
 [agents.primary]
 provider = "claude"          # "claude" | "gemini" | "ping" (no-LLM smoke test)
@@ -26,8 +31,12 @@ port = 8765
 [services.web_chat]
 enabled = true
 
+# Polling services (email, telegram, imessage) all pace with the same key,
+# `poll_interval_s` — seconds slept between fetches. Each sets its own default;
+# override here only if the default doesn't suit.
 [services.email]
 enabled = false
+# poll_interval_s = 60
 username = ""
 imap_host = "imap.gmail.com"
 imap_port = 993
@@ -38,6 +47,8 @@ allowed_senders = []
 [services.telegram]
 enabled = false
 allowed_chat_ids = []
+# Not poll_interval_s: this is how long telegram's server holds getUpdates open
+# waiting for a message. The client sleeps 0 between calls because of it.
 poll_timeout = 30
 
 # Receive-only feed of the host's Messages db. Default db_path is ~/Library/Messages/chat.db; 
@@ -45,6 +56,7 @@ poll_timeout = 30
 [services.imessage]
 enabled = false
 wake = false
+# poll_interval_s = 15
 # db_path = "/mnt/imessage/chat.db"
 
 # Agent-schedulable wakes: `echo 'in 300 water plants' > <home>/run/cron/in`.

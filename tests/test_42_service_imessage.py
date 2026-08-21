@@ -36,11 +36,11 @@ def _insert(db, rowid: int, text: str, is_from_me: int = 0) -> None:
         conn.execute("INSERT INTO message VALUES (?, ?, ?, 1)", (rowid, text, is_from_me))
 
 
-async def test_new_rows_emit_but_history_and_own_messages_do_not(
-    harness, chat_db, monkeypatch
-):
-    monkeypatch.setattr(IMessage, "poll_interval_s", 0.05)
-    svc = IMessage(f"t-im-{uuid.uuid4().hex[:6]}", {"db_path": str(chat_db)})
+async def test_new_rows_emit_but_history_and_own_messages_do_not(harness, chat_db):
+    svc = IMessage(
+        f"t-im-{uuid.uuid4().hex[:6]}",
+        {"db_path": str(chat_db), "poll_interval_s": 0.05},
+    )
     q = await harness(svc)
 
     _insert(chat_db, 2, "sent by me", is_from_me=1)
@@ -51,9 +51,11 @@ async def test_new_rows_emit_but_history_and_own_messages_do_not(
     assert q.empty(), "pre-existing rows and own messages must not go out"
 
 
-async def test_receive_only_contract(harness, chat_db, monkeypatch):
-    monkeypatch.setattr(IMessage, "poll_interval_s", 0.05)
-    svc = IMessage(f"t-im-{uuid.uuid4().hex[:6]}", {"db_path": str(chat_db)})
+async def test_receive_only_contract(harness, chat_db):
+    svc = IMessage(
+        f"t-im-{uuid.uuid4().hex[:6]}",
+        {"db_path": str(chat_db), "poll_interval_s": 0.05},
+    )
     q = await harness(svc)
 
     assert svc.handle.in_path.exists(), "every handle dir has an `in` FIFO"

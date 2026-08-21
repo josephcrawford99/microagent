@@ -34,6 +34,7 @@ class Service:
     BODY_HINT: str = "<text to send>"  # `body` placeholder (cron: a grammar)
 
     # Pacing for the base poll loop; only read when `poll()` is overridden.
+    # The subclass sets the default, config.toml overrides it per install.
     poll_interval_s: float = 0.0  # 0 = the fetch itself blocks (long-poll)
     error_backoff_s: float = 5.0
 
@@ -43,6 +44,9 @@ class Service:
         self.agent_id = agent_id
         self.config = config
         self.handle = Handle(self.name)
+        self.poll_interval_s = float(
+            config.get("poll_interval_s", type(self).poll_interval_s)
+        )
         self.secrets = {k: os.environ.get(k, "") for k in self.REQUIRED_ENV}
         self._tasks: set[asyncio.Task[None]] = set()
 
