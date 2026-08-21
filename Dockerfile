@@ -1,6 +1,8 @@
 FROM python:3.12-alpine
 
-RUN apk add --no-cache nodejs npm git tzdata   # tzdata: time.tzset() needs zoneinfo
+# bash: the claude CLI's Bash tool refuses to run without it (busybox sh is
+# not enough). tzdata: time.tzset() needs zoneinfo.
+RUN apk add --no-cache nodejs npm git bash tzdata
 RUN npm install -g @anthropic-ai/claude-code
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
