@@ -108,6 +108,25 @@ async def test_telegram_status_blanks_markup_it_did_not_mean(harness, monkeypatc
     assert posted["text"] == "_Bash: grep foo bar  .py_"
 
 
+async def test_telegram_status_gives_up_on_a_chat_that_refuses_it(
+    harness, monkeypatch
+):
+    """A dead chat must not leave a task typing at it every few seconds."""
+    svc, calls = await _telegram(harness, monkeypatch)
+
+    def refuse(method, params):
+        calls.append((method, params))
+        raise RuntimeError("chat not found")
+
+    svc._api = refuse
+    await _drawn(svc, "42", {"status": "Bash: git log"}, pause=0.1)
+
+    assert svc.status == {}, "the indicator took itself down"
+    before = len(calls)
+    await asyncio.sleep(0.1)
+    assert len(calls) == before, "and stopped asking"
+
+
 async def test_telegram_status_skips_a_repeat_line(harness, monkeypatch):
     svc, calls = await _telegram(harness, monkeypatch)
 

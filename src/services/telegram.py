@@ -96,15 +96,13 @@ class Telegram(Service):
         if not msg.status:
             await self.clear_status(msg.address)
             return
-        async with self.drawing:
-            status = self.status.get(msg.address)
-            if status is None:
-                self.status[msg.address] = status = Status(
-                    typing=self.spawn(self._keep_typing(msg.address))
-                )
-            await asyncio.to_thread(
-                self._show_status, msg.address, status, msg.status
-            )
+        try:
+            await self._draw(msg.address, msg.status)
+        except Exception:
+            # A chat that won't take the indicator won't take the next line
+            # either. Take it down rather than leave a task typing at a wall.
+            await self.clear_status(msg.address)
+            raise
 
     async def clear_status(self, chat_id: str) -> None:
         """Take down the indicator, if one is up. Never raises: a stale
@@ -125,8 +123,19 @@ class Telegram(Service):
             except Exception as e:
                 log.warning("could not clear status in %s: %s", chat_id, e)
 
+    async def _draw(self, chat_id: str, text: str) -> None:
+        """Put one line up, starting the indicator if this is the first."""
+        async with self.drawing:
+            status = self.status.get(chat_id)
+            if status is None:
+                self.status[chat_id] = status = Status(
+                    typing=self.spawn(self._keep_typing(chat_id))
+                )
+            await asyncio.to_thread(self._show_status, chat_id, status, text)
+
     async def _keep_typing(self, chat_id: str) -> None:
-        """Hold the "typing" state for as long as the agent is working."""
+        """Hold the "typing" state for as long as the agent is working. A chat
+        that refuses one refuses the rest, so ask once more and stop."""
         while True:
             try:
                 await asyncio.to_thread(
@@ -135,6 +144,7 @@ class Telegram(Service):
                 )
             except Exception as e:
                 log.warning("no typing action for %s: %s", chat_id, e)
+                return
             await asyncio.sleep(TYPING_INTERVAL_S)
 
     # --- helpers ---
