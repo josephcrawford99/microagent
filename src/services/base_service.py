@@ -1,7 +1,8 @@
 """Base Service: a task that owns one handle directory.
 
 Subclasses set `name`, implement `handle_in()` (delivery) and whatever
-background monitoring feeds `write_out()`.
+background monitoring feeds `write_out()`. A channel that can show the agent
+working also implements `handle_status()`.
 """
 
 from __future__ import annotations
@@ -49,6 +50,8 @@ class Service:
         )
         self.secrets = {k: os.environ.get(k, "") for k in self.REQUIRED_ENV}
         self._tasks: set[asyncio.Task[None]] = set()
+        self._latest_status: Message | None = None
+        self._status_waiting = asyncio.Event()
 
     @cached_property
     def state(self) -> ComponentState:
@@ -68,11 +71,19 @@ class Service:
     def wake(self) -> bool:
         return bool(self.config.get("wake", self.default_wake))
 
+    @property
+    def shows_status(self) -> bool:
+        """True when the subclass implements `handle_status()`. A channel with
+        nowhere to show progress reads the same lines and drops them."""
+        return type(self).handle_status is not Service.handle_status
+
     async def start(self, *, poll: bool = True) -> None:
         """Start reading `in` (the handle dir itself exists since __init__),
         and run the poll loop when the subclass overrides `poll()` and no
         required env var is missing. `poll=False` skips the loop."""
         self.handle.add_reader("in", self._on_in)
+        if self.shows_status:
+            self.spawn(self._status_loop())
         if not poll or type(self).poll is Service.poll:
             return
         if missing := [k for k, v in self.secrets.items() if not v]:
@@ -110,7 +121,12 @@ class Service:
             await asyncio.sleep(self.poll_interval_s)
 
     def _on_in(self, msg: Message) -> None:
-        self.spawn(self._dispatch(msg))
+        """One line off `in`. A status is the harness saying what it is doing,
+        not something to deliver, so it goes to the indicator instead."""
+        if msg.status is not None:
+            self._on_status(msg)
+        else:
+            self.spawn(self._dispatch(msg))
 
     async def _dispatch(self, msg: Message) -> None:
         try:
@@ -120,10 +136,40 @@ class Service:
             # Surface delivery failures on `out` so the model learns next wake.
             self.write_out(sender=self.name, body=f"error: {type(e).__name__}: {e}")
 
+    def _on_status(self, msg: Message) -> None:
+        """Keep only the newest line, and only when there is somewhere to show
+        it. An indicator that falls behind the agent should catch up to now,
+        not replay a backlog."""
+        if not self.shows_status:
+            return
+        self._latest_status = msg
+        self._status_waiting.set()
+
+    async def _status_loop(self) -> None:
+        """Render status lines one at a time. A failure here is logged and
+        dropped, never written to `out`: an indicator that could not be drawn
+        must not wake the agent to say so."""
+        while True:
+            await self._status_waiting.wait()
+            self._status_waiting.clear()
+            msg, self._latest_status = self._latest_status, None
+            if msg is None:
+                continue
+            try:
+                await self.handle_status(msg)
+            except Exception:
+                log.exception("%s: handle_status failed", self.name)
+
     async def handle_in(self, msg: Message) -> None:
         """Deliver one outbound message. Whether the channel accepts it (an
         address it needs, a body it can parse) is this method's call."""
         raise NotImplementedError
+
+    async def handle_status(self, msg: Message) -> None:
+        """Show that the agent is working on `address`'s message, `status`
+        being what it is doing right now. An empty `status` means the work is
+        over and whatever was shown should be taken down. Leave unimplemented
+        for a channel with nowhere to put it."""
 
     def write_out(self, *, sender: str, body: str) -> None:
         """Publish one inbound event on `out`, mirrored to the log."""

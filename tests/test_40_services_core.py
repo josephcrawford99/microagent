@@ -33,6 +33,27 @@ class Boom(Service):
         raise ValueError("nope")
 
 
+class Shower(Service):
+    """A service that can show the agent working, and remembers what it saw."""
+
+    name = "shower_test"
+
+    def __init__(self, agent_id, config):
+        super().__init__(agent_id, config)
+        self.shown: list[str | None] = []
+        self.drawn = asyncio.Event()
+        self.hold = asyncio.Event()
+        self.hold.set()
+
+    async def handle_in(self, msg):
+        self.write_out(sender="shower", body=msg.body)
+
+    async def handle_status(self, msg):
+        await self.hold.wait()
+        self.shown.append(msg.status)
+        self.drawn.set()
+
+
 class Ticker(Service):
     """A polling service, to check how the base loop is paced."""
 
@@ -44,6 +65,47 @@ class Ticker(Service):
 
     async def poll(self):
         pass
+
+
+def test_shows_status_follows_the_override():
+    assert Shower("t-show", {}).shows_status is True
+    assert Echo("t-echo", {}).shows_status is False, "no handle_status, nothing to show"
+
+
+async def test_status_reaches_a_channel_that_shows_it(harness):
+    svc = Shower("t-show", {})
+    await harness(svc)
+
+    assert write_in(svc.handle, {"address": "42", "status": "Bash: git log"}) is True
+    await asyncio.wait_for(svc.drawn.wait(), 5)
+    assert svc.shown == ["Bash: git log"]
+
+
+async def test_status_is_not_a_delivery_and_is_not_logged(harness):
+    """An `in` line is mirrored to the log; a status is what the agent is doing
+    this second, so it is neither delivered nor kept."""
+    svc = Echo("t-echo", {})
+    q = await harness(svc)
+
+    assert write_in(svc.handle, {"address": "", "status": "Bash: git log"}) is True
+    assert write_in(svc.handle, {"address": "", "body": "hi"}) is True
+    line = await next_line(q)
+    assert line.body == "hi", "the status was dropped, the message got through"
+    assert [e.get("body") for e in svc.handle.read_log()] == ["hi", "hi"]
+
+
+async def test_a_burst_of_status_coalesces_to_the_newest(harness):
+    """An indicator that falls behind should catch up to now, not replay."""
+    svc = Shower("t-show", {})
+    await harness(svc)
+    svc.hold.clear()
+
+    for text in ("first", "second", "third"):
+        write_in(svc.handle, {"address": "42", "status": text})
+    await asyncio.sleep(0.05)
+    svc.hold.set()
+    await asyncio.wait_for(svc.drawn.wait(), 5)
+    assert svc.shown == ["third"]
 
 
 def test_poll_interval_defaults_to_the_subclass_and_config_overrides():

@@ -7,6 +7,7 @@ that failed step 0 fails here before any tokens are spent.
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 import uuid
 
@@ -15,6 +16,7 @@ import pytest
 from lib.message import Message, parse_reply
 from lib.plugins import load_provider
 from lib.state import ComponentState
+from providers.claude import Claude, tool_lines
 from providers.ping import Ping
 
 ENVELOPE_PROMPT = (
@@ -27,6 +29,70 @@ async def test_ping_round_trip_is_channel_less():
     msgs = parse_reply(await Ping("t-ping", {}).generate("anything"))
     assert msgs == [Message(channel="", body="pong")]
     assert msgs[0].channel == "", "raw text carries no channel; routing is the harness's call"
+
+
+STREAM = [
+    b'{"type":"system","subtype":"init","session_id":"s-1"}',
+    b'{"type":"assistant","message":{"content":[{"type":"text","text":"let me look"},'
+    b'{"type":"tool_use","name":"Read","input":{"file_path":"space/meals.md"}}]}}',
+    b'{"type":"user","message":{"content":[{"type":"tool_result","content":"..."}]}}',
+    b'{"type":"assistant","message":{"content":['
+    b'{"type":"tool_use","name":"Bash","input":{"command":"curl -s example.com",'
+    b'"description":"fetch it"}}]}}',
+    b'{"type":"result","subtype":"success","result":"[]","session_id":"s-1",'
+    b'"num_turns":3,"total_cost_usd":0.01,"duration_ms":1200}',
+]
+
+
+def test_tool_lines_name_the_call_and_skip_prose():
+    event = {"message": {"content": [
+        {"type": "text", "text": "thinking out loud"},
+        {"type": "tool_use", "name": "Bash", "input": {"command": "git  log\n-1"}},
+        {"type": "tool_use", "name": "Mystery", "input": {"weird": "value"}},
+        {"type": "tool_use", "name": "Empty", "input": {}},
+    ]}}
+    assert tool_lines(event) == [
+        "Bash: git log -1",       # whitespace collapsed; prose is not progress
+        "Mystery: value",         # no known field, so the first string it got
+        "Empty: ",
+    ]
+    assert tool_lines({"message": {"content": []}}) == []
+
+
+async def test_stream_reports_tools_and_returns_the_result_event():
+    claude = Claude("t-claude", {})
+    seen: list[str] = []
+    claude.on_status = seen.append
+
+    stdout = asyncio.StreamReader()
+    stdout.feed_data(b"\n".join(STREAM) + b"\n")
+    stdout.feed_eof()
+    out = await claude._stream(stdout)
+
+    assert seen == ["Read: space/meals.md", "Bash: curl -s example.com"]
+    assert (out["result"], out["session_id"], out["num_turns"]) == ("[]", "s-1", 3)
+
+
+async def test_stream_survives_a_split_line_and_a_missing_newline():
+    """The CLI's events are read in chunks, so one can straddle two reads, and
+    the last may arrive without its newline."""
+    claude = Claude("t-claude", {})
+    raw = b"\n".join(STREAM)
+    stdout = asyncio.StreamReader()
+    stdout.feed_data(raw[:120])
+    stdout.feed_data(raw[120:])
+    stdout.feed_eof()
+
+    assert (await claude._stream(stdout))["session_id"] == "s-1"
+
+
+async def test_stream_ignores_junk_lines():
+    claude = Claude("t-claude", {})
+    stdout = asyncio.StreamReader()
+    stdout.feed_data(b"not json\n[1,2]\n" + STREAM[-1] + b"\n")
+    stdout.feed_eof()
+
+    assert (await claude._stream(stdout))["subtype"] == "success"
 
 
 def test_plugin_loaders_resolve():

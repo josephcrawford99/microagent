@@ -48,6 +48,78 @@ async def test_telegram_without_address_errors_on_out(harness, monkeypatch):
     assert "needs an `address`" in line.body
 
 
+def _stub_api(svc) -> list[tuple[str, dict]]:
+    """Record every telegram call instead of making it, and hand back the one
+    field the service reads: a new message's id."""
+    calls: list[tuple[str, dict]] = []
+
+    def api(method, params):
+        calls.append((method, params))
+        return {"result": {"message_id": 77}}
+
+    svc._api = api
+    return calls
+
+
+async def _drawn(svc, chat_id: str, envelope: dict, pause: float = 0.05) -> None:
+    """Write one line and let the service finish with it."""
+    write_in(svc.handle, {"address": chat_id, **envelope})
+    await asyncio.sleep(pause)
+
+
+async def _telegram(harness, monkeypatch):
+    """A telegram with its network stubbed out and no poll loop running."""
+    monkeypatch.setattr("services.telegram.STATUS_INTERVAL_S", 0.0)
+    svc = Telegram(_aid("t-tg"), {})
+    await harness(svc, poll=False)
+    svc.token = "fake-token-never-used"
+    return svc, _stub_api(svc)
+
+
+async def test_telegram_status_posts_edits_then_gives_way_to_the_reply(
+    harness, monkeypatch
+):
+    """One message stands in for the wait, and the reply takes its place."""
+    svc, calls = await _telegram(harness, monkeypatch)
+
+    await _drawn(svc, "42", {"status": "Read: notes.md"})
+    await _drawn(svc, "42", {"status": "Bash: git log"})
+    await _drawn(svc, "42", {"body": "here you go"})
+    await _drawn(svc, "42", {"status": ""})
+
+    assert any(m == "sendChatAction" for m, _ in calls), "typing runs alongside"
+    posted = [(m, p) for m, p in calls if m != "sendChatAction"]
+    assert [m for m, _ in posted] == [
+        "sendMessage", "editMessageText", "deleteMessage", "sendMessage",
+    ]
+    assert posted[0][1]["text"] == "_Read: notes.md_"
+    assert posted[1][1]["text"] == "_Bash: git log_", "same message, edited"
+    assert posted[2][1]["message_id"] == 77, "the indicator goes before the reply"
+    assert posted[3][1]["text"] == "here you go"
+    assert svc.status == {}, "nothing left holding the chat"
+
+
+async def test_telegram_status_blanks_markup_it_did_not_mean(harness, monkeypatch):
+    """One stray `_` in a tool argument would have telegram reject the line."""
+    svc, calls = await _telegram(harness, monkeypatch)
+
+    await _drawn(svc, "42", {"status": "Bash: grep foo_bar *.py"})
+    posted = next(p for m, p in calls if m == "sendMessage")
+    assert posted["text"] == "_Bash: grep foo bar  .py_"
+
+
+async def test_telegram_status_skips_a_repeat_line(harness, monkeypatch):
+    svc, calls = await _telegram(harness, monkeypatch)
+
+    for _ in range(2):
+        await _drawn(svc, "42", {"status": "Bash: git log"})
+    await _drawn(svc, "42", {"status": ""})
+
+    assert [m for m, _ in calls if m != "sendChatAction"] == [
+        "sendMessage", "deleteMessage",
+    ], "telegram refuses a no-op edit, so an unchanged line is not drawn again"
+
+
 async def test_email_without_address_errors_on_out(harness, monkeypatch):
     monkeypatch.setattr(Email, "_drain", lambda self: [])  # keep poll off the network
     svc = Email(_aid("t-em"), {})

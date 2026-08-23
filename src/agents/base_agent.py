@@ -15,6 +15,7 @@ from lib.message import Batch, Message
 from lib.paths import (
     CONFIG_ENV, CONFIG_TOML, REPO_DIR, RUN_DIR, SOUL_PATH, SPACE_DIR, STATE_DIR,
 )
+from providers.base_provider import ignore_status
 
 if TYPE_CHECKING:
     from providers.base_provider import Provider
@@ -53,6 +54,7 @@ class BaseAgent(ABC):
     `out` carries what the agent addresses to `agent`, `log` mirrors both."""
 
     coalesce_s = 0.5  # how long a wake waits for the rest of a burst
+    OPENING_STATUS = "thinking"  # first progress line, sent before the provider
 
     def __init__(self, provider: Provider, services: list[Service]) -> None:
         self.provider = provider
@@ -95,11 +97,18 @@ class BaseAgent(ABC):
             batch, self.pending = self.pending, Batch()
             if not batch:
                 continue
+            # The read receipt: a wake starts within `coalesce_s` of a message
+            # landing, so the start of a wake is when the agent read it.
+            self.provider.on_status = partial(self.write_status, batch)
+            self.write_status(batch, self.OPENING_STATUS)
             try:
                 await self.wake(batch)
             except Exception as e:
                 log.exception("wake failed")
                 self.notify_all(batch, f"Wake failed: {e}")
+            finally:
+                self.provider.on_status = ignore_status
+                self.write_status(batch, "")
 
     def boot(self) -> None:
         """Announce the respin, once every FIFO has its reader: a service that
@@ -141,6 +150,19 @@ class BaseAgent(ABC):
         if svc is None:
             raise LookupError(f"no such channel: {msg.channel!r}")
         svc.handle.write("in", msg)
+
+    def write_status(self, batch: Batch, text: str) -> None:
+        """Tell every channel this wake came from what the agent is doing, so
+        it can show the wait. Rides `in` like any other line the harness sends
+        a channel; what a channel makes of it is its own business, and most
+        make nothing. Empty text means the wake is over."""
+        for channel in batch.channels:
+            svc = self.get_service(channel)
+            if svc is None:
+                continue
+            svc.handle.write(
+                "in", Message(channel, batch.reply_to(channel), status=text)
+            )
 
     def last_channel(self, batch: Batch) -> str:
         """Where a reply belongs when the agent didn't say"""

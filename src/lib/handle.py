@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, cast
 from asyncio import get_running_loop
 
-from lib.message import ADDRESS, SENDER, Message
+from lib.message import ADDRESS, SENDER, STATUS, Message
 from lib.paths import RUN_DIR, write_atomic
 
 log = logging.getLogger(__name__)
@@ -74,7 +74,9 @@ class Handle:
         Opens as the sole reader (O_RDWR keeps the FIFO from ever hitting EOF).
         Buffers partial lines; each complete line is parsed to a Message.
         Reads from `in` are mirrored to the log, which catches external
-        writers that bypass write(); `out` lines were logged at write time."""
+        writers that bypass write(); `out` lines were logged at write time.
+        Status lines are the exception: they are what the agent is doing this
+        second, not what happened, and would bury the record they sit in."""
         loop = get_running_loop()
         tee = which == "in"
         fd = os.open(self.path / which, os.O_RDWR | os.O_NONBLOCK)
@@ -95,7 +97,7 @@ class Handle:
                 if not line.strip():
                     continue
                 envelope = parse_line(line)
-                if tee:
+                if tee and STATUS not in envelope:
                     self.append_log(envelope)
                 try:
                     callback(Message.from_wire(self.name, envelope, WIRE_KEY[which]))

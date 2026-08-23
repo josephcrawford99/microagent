@@ -14,6 +14,8 @@ $ tail -f run/telegram/log                                        # watch a chan
 
 The interface is the filesystem. A **service** (telegram, email, socket, cron, ...) owns exactly one directory of handles. `in` (FIFO it consumes), `out` (FIFO it emits on), `log` (append-only mirror of both). That directory is its entire contract, so a service could become a separate process, or a shell script, without the harness noticing. The harness itself owns `run/agent/` in the same shape: a line on `in` wakes the agent, `out` carries anything the agent addresses to `agent`, and `log` mirrors both. A restart announces itself through the same door: once every FIFO has its reader, each service is told the boot time and the harness pokes its own `in`, so the agent's first wake says why it is awake and `run/agent/log` keeps the record.
 
+A line on `in` is a message to deliver or a status to show, and the envelope says which: `{"address": "...", "body": "..."}` is a message, `{"address": "...", "status": "Bash: git log"}` is the harness saying what the agent is doing right now, while it is doing it. A channel that can show progress implements `handle_status()`; one that can't reads the same lines and drops them. Status is the only line that never reaches `log`, because it is what is happening rather than what happened, and an empty `status` says the work is over.
+
 Every service is the same two methods, and every provider is one. The harness reads each `out` and writes any `in`, and it never learns which service is which:
 
 ```mermaid
@@ -59,7 +61,7 @@ So the three pluggable pieces are small and independent:
 
 | `src/` dir | You write | Wired by |
 |---|---|---|
-| `services/` | a class with `handle_in()` + something that calls `write_out()` | `[services.<name>]` in config.toml |
+| `services/` | a class with `handle_in()` + something that calls `write_out()` (`handle_status()` if it can show progress) | `[services.<name>]` in config.toml |
 | `providers/` | `async def generate(prompt) -> str` | `provider = "<name>"` in config.toml |
 | `agents/` | the loop policy itself | `main.py` |
 
@@ -147,6 +149,8 @@ The dashboard listens on port 8767 (on every interface by default; set `host = "
 The hard part was really making the base classes for the pluggable features. Extensibility is the point of the project, so a fat base class defeats the one feature it exists to give you. A developer who has to study `base_service.py` before writing a plugin won't write one.
 
 Most of the work was removal. The risk is a base class with several verbs that overlap, where the names don't tell you which one to use. `Service` now has one method you write, `handle_in()`, and one you call, `write_out()`. `Provider` has one method, `generate(prompt) -> str`. Everything else has a default.
+
+Live status was the test of that. Telegram showing what the agent is doing mid-wake could have been a third FIFO, a status service, or a callback registry. It is none of those: the harness writes one more kind of line to the `in` it already writes to, `Provider` gains one optional `on_status` a provider may never call, and `Service` gains one optional `handle_status()` a channel may never implement. Nothing that ignores it had to change.
 
 ## Limitations
 

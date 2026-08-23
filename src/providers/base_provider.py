@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from functools import cached_property
-from typing import Any
+from typing import Any, Callable
 
 from lib.state import ComponentState
+
+
+def ignore_status(text: str) -> None:
+    """Drop a progress line. The default `on_status`, and what the harness puts
+    back once a wake is over."""
 
 
 class Provider(ABC):
@@ -23,6 +28,10 @@ class Provider(ABC):
     def __init__(self, agent_id: str, config: dict[str, Any]) -> None:
         self.agent_id = agent_id
         self.config = config
+        # Where a mid-generate progress line goes. The harness rewires this to
+        # the channels each wake came from; a provider that cannot see its own
+        # progress simply never calls it.
+        self.on_status: Callable[[str], None] = ignore_status
 
     @cached_property
     def state(self) -> ComponentState:

@@ -11,6 +11,7 @@ log = logging.getLogger(__name__)
 
 SENDER = "from"       # inbound wire key: who sent it
 ADDRESS = "address"   # outbound wire key: who it's for
+STATUS = "status"     # outbound wire key: what the agent is doing right now
 
 
 class MessageError(ValueError):
@@ -19,25 +20,33 @@ class MessageError(ValueError):
 
 @dataclass(frozen=True)
 class Message:
-    """One message on a channel. `address` is the other end. An empty `channel` is unrouted text:
-    a reply the provider couldn't shape into messages, left for the harness to
-    place."""
+    """One line on a channel. `address` is the other end. An empty `channel` is
+    unrouted text: a reply the provider couldn't shape into messages, left for
+    the harness to place.
+
+    A line is a message or a status, never both, and `status` says which: None
+    for a message, whose text is its `body`. A status is the harness saying
+    what the agent is doing while it works on that channel's message, for the
+    channel to show however it likes, or to ignore; an empty one says the work
+    is over and there is nothing left to show."""
 
     channel: str
     address: str = ""
     body: str = ""
+    status: str | None = None
 
     def to_wire(self, key: str) -> dict[str, str]:
         """The line written to a handle, `key` naming the field the address
         travels in. The channel doesn't travel — it's the dir we write into."""
-        return {key: self.address, "body": self.body}
+        text = {"body": self.body} if self.status is None else {STATUS: self.status}
+        return {key: self.address, **text}
 
     @classmethod
     def from_wire(cls, channel: str, line: dict[str, str], key: str) -> Message:
         """One line off a handle. Lenient, unlike `parse_reply`: the agent may
         write these by hand, and a service should see a message with empty
         fields (and refuse it itself) rather than never see it."""
-        return cls(channel, line.get(key, ""), line.get("body", ""))
+        return cls(channel, line.get(key, ""), line.get("body", ""), line.get(STATUS))
 
 
 def parse_reply(reply: str) -> list[Message]:
