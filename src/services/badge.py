@@ -88,6 +88,9 @@ class Badge(Service):
     conversational = False
     BODY_HINT = USAGE
     poll_interval_s = 30.0
+    # A page that refuses an update is not urgent, and the catcher is
+    # someone else's host: retry no faster than a normal tick.
+    error_backoff_s = 60.0
 
     def __init__(self, agent_id: str, config: dict[str, Any]) -> None:
         super().__init__(agent_id, config)
