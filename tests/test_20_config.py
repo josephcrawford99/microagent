@@ -76,10 +76,12 @@ def test_env_write_preserves_comments_and_order(home):
     assert "ALPHA=new" in lines
 
 
-def test_env_write_drops_absent_keys(home):
-    (home / ".env").write_text("KEEP=1\nDROP=2\n")
-    write_env({"KEEP": "1"})
-    assert read_env() == {"KEEP": "1"}
+def test_env_write_leaves_unnamed_keys_alone(home):
+    """A one-key POST used to empty the file. Every other secret on the box
+    has to survive it."""
+    (home / ".env").write_text("KEEP=1\nOTHER=2\n")
+    write_env({"NEW": "3"})
+    assert read_env() == {"KEEP": "1", "OTHER": "2", "NEW": "3"}
 
 
 def test_env_write_is_atomic(home):

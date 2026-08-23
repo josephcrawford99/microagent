@@ -47,8 +47,9 @@ def read_env() -> dict[str, str]:
 
 
 def write_env(entries: dict[str, str]) -> None:
-    """Preserve comments / order of existing keys; append new ones at the end.
-    Keys absent from `entries` are dropped (UI delete)."""
+    """Upsert. Named keys take the new value in place, unknown keys append at
+    the end, and everything else — comments, order, keys nobody named — stays
+    as it was. Sending one key must never cost the file the rest of them."""
     try:
         with CONFIG_ENV.open() as f:
             lines = f.readlines()
@@ -62,8 +63,7 @@ def write_env(entries: dict[str, str]) -> None:
             out.append(line)
             continue
         k = s.split("=", 1)[0].strip()
-        if k in remaining:
-            out.append(f"{k}={remaining.pop(k)}\n")
+        out.append(f"{k}={remaining.pop(k)}\n" if k in remaining else line)
     for k, v in remaining.items():
         out.append(f"{k}={v}\n")
     CONFIG_ENV.parent.mkdir(parents=True, exist_ok=True)

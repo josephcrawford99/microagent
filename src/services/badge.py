@@ -56,6 +56,7 @@ DEFAULT_PROMPT = (
     "anything from a private conversation."
 )
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+USER_AGENT = "microagent-badge/1"
 
 
 @dataclass(frozen=True)
@@ -222,6 +223,9 @@ class Badge(Service):
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.secrets['BADGE_TOKEN']}",
+                # Named, because a WAF in front of the catcher blocks the
+                # default Python-urllib signature outright.
+                "User-Agent": USER_AGENT,
             },
         )
         try:
