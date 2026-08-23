@@ -65,3 +65,18 @@ enabled = false
 max_active = 8
 min_delay_seconds = 60
 max_fires_per_day = 24
+
+# Pushes uptime and message counts to a website, and carries one line a day
+# the site can ask the agent to rewrite. Needs BADGE_TOKEN in .env, and
+# post_url set, or nothing is sent.
+[services.badge]
+enabled = false
+post_url = ""
+# poll_interval_s = 30
+min_refresh_interval_s = 3600  # floor between quip requests; the button is public
+max_quip_chars = 200
+quip_prompt = """
+Write today's line for the badge on my public website. One sentence, dry and
+funny, about life as an always-on agent. Riff on the numbers below if you like.
+Never quote or reference anything from a private conversation.
+"""

@@ -12,7 +12,7 @@ $ tail -f run/telegram/log                                        # watch a chan
 
 ## The idea
 
-The interface is the filesystem. A **service** (telegram, email, socket, cron, ...) owns exactly one directory of handles. `in` (FIFO it consumes), `out` (FIFO it emits on), `log` (append-only mirror of both). That directory is its entire contract, so a service could become a separate process, or a shell script, without the harness noticing. The harness itself owns `run/agent/` in the same shape: a line on `in` wakes the agent, `out` carries anything the agent addresses to `agent`, and `log` mirrors both.
+The interface is the filesystem. A **service** (telegram, email, socket, cron, ...) owns exactly one directory of handles. `in` (FIFO it consumes), `out` (FIFO it emits on), `log` (append-only mirror of both). That directory is its entire contract, so a service could become a separate process, or a shell script, without the harness noticing. The harness itself owns `run/agent/` in the same shape: a line on `in` wakes the agent, `out` carries anything the agent addresses to `agent`, and `log` mirrors both. A restart announces itself through the same door: once every FIFO has its reader, each service is told the boot time and the harness pokes its own `in`, so the agent's first wake says why it is awake and `run/agent/log` keeps the record.
 
 Every service is the same two methods, and every provider is one. The harness reads each `out` and writes any `in`, and it never learns which service is which:
 
@@ -107,7 +107,7 @@ See `src/defaults/config.default.toml` for the annotated version with every opti
 
 `.microagent/soul.md` is the agent's personality.
 
-`.env` holds secrets only: `CLAUDE_CODE_OAUTH_TOKEN`, `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `EMAIL_PASSWORD`, `DASHBOARD_TOKEN`.
+`.env` holds secrets only: `CLAUDE_CODE_OAUTH_TOKEN`, `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `EMAIL_PASSWORD`, `DASHBOARD_TOKEN`, `BADGE_TOKEN`.
 
 Set `provider = "ping"` for a no-LLM test (it answers `pong` to everything). 
 

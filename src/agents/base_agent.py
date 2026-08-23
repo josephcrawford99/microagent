@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -86,6 +87,7 @@ class BaseAgent(ABC):
             "agent up | harness=%s provider=%s services=%s",
             type(self).__name__, self.provider.name, [s.name for s in self.services],
         )
+        self.boot()
         while True:
             await self.wake_event.wait()
             await asyncio.sleep(self.coalesce_s)  # coalesce bursts
@@ -98,6 +100,20 @@ class BaseAgent(ABC):
             except Exception as e:
                 log.exception("wake failed")
                 self.notify_all(batch, f"Wake failed: {e}")
+
+    def boot(self) -> None:
+        """Announce the respin, once every FIFO has its reader: a service that
+        writes any earlier is talking to a pipe nobody holds. Services hear it
+        first, then a poke on our own `in` wakes the agent with the reason, so
+        the restart reaches the model the same way any other line does and the
+        log keeps a record of it."""
+        at = datetime.now().isoformat(timespec="seconds")
+        for svc in self.services:
+            try:
+                svc.boot(at)
+            except Exception:
+                log.exception("%s: boot notice failed", svc.name)
+        self.handle.write("in", Message("agent", "boot", f"restarted at {at}"))
 
     @abstractmethod
     async def wake(self, batch: Batch) -> None:

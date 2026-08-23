@@ -80,6 +80,12 @@ class Service:
             return
         self.spawn(self._poll_loop())
 
+    def boot(self, at: str) -> None:
+        """The process just respun and the handle tree is readable again; `at`
+        is the local timestamp of that boot. Called once, after `start()`, and
+        late enough that `write_out` reaches the harness. Override to react;
+        most services have nothing to say about a restart."""
+
     def spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         """Run a background coroutine, holding a strong reference so the
         event loop can't garbage-collect it mid-flight."""
