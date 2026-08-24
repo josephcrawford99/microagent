@@ -1,8 +1,9 @@
 """The handle tree. Everything is a file(tm).
 
 Each service owns a directory under RUN_DIR (`run/<name>/` in the home):
-`in` and `out` FIFOs plus an append-only `log` mirror. The wire key is
-fixed by direction: `in` lines carry `address`, `out` lines carry `from`.
+`in` and `out` FIFOs plus an append-only `log` mirror, and a `status` FIFO
+when the service can show one. The wire key is fixed by direction: lines
+written to a service carry `address`, lines it publishes carry `from`.
 """
 
 from __future__ import annotations
@@ -18,13 +19,14 @@ from pathlib import Path
 from typing import Any, Callable, Literal, cast
 from asyncio import get_running_loop
 
-from lib.message import ADDRESS, SENDER, STATUS, Message
+from lib.message import ADDRESS, SENDER, Message
 from lib.paths import RUN_DIR, write_atomic
 
 log = logging.getLogger(__name__)
 
 READ_CHUNK = 65536
-WIRE_KEY = {"in": ADDRESS, "out": SENDER}
+Endpoint = Literal["in", "out", "status"]
+WIRE_KEY = {"in": ADDRESS, "status": ADDRESS, "out": SENDER}
 TAIL_LINES = 20
 
 
@@ -55,7 +57,9 @@ class Handle:
     to the existing FIFOs
     """
 
-    def __init__(self, name: str, root: Path = RUN_DIR) -> None:
+    def __init__(
+        self, name: str, root: Path = RUN_DIR, extra: tuple[str, ...] = ()
+    ) -> None:
         self.name = name
         self.path = root / name
         self.in_path = self.path / "in"
@@ -63,20 +67,18 @@ class Handle:
         self.log_path = self.path / "log"
         self.path.mkdir(parents=True, exist_ok=True)
         self.path.chmod(0o700)
-        for fifo in (self.in_path, self.out_path):
-            if not fifo.exists():
-                os.mkfifo(fifo, 0o600)
+        for fifo in ("in", "out", *extra):
+            if not (self.path / fifo).exists():
+                os.mkfifo(self.path / fifo, 0o600)
 
     def add_reader(
-        self, which: Literal["in", "out"], callback: Callable[[Message], None]
+        self, which: Endpoint, callback: Callable[[Message], None]
     ) -> int:
         """Register a per-line callback on the event loop for one FIFO.
         Opens as the sole reader (O_RDWR keeps the FIFO from ever hitting EOF).
         Buffers partial lines; each complete line is parsed to a Message.
         Reads from `in` are mirrored to the log, which catches external
-        writers that bypass write(); `out` lines were logged at write time.
-        Status lines are the exception: they are what the agent is doing this
-        second, not what happened, and would bury the record they sit in."""
+        writers that bypass write(); `out` lines were logged at write time."""
         loop = get_running_loop()
         tee = which == "in"
         fd = os.open(self.path / which, os.O_RDWR | os.O_NONBLOCK)
@@ -97,7 +99,7 @@ class Handle:
                 if not line.strip():
                     continue
                 envelope = parse_line(line)
-                if tee and STATUS not in envelope:
+                if tee:
                     self.append_log(envelope)
                 try:
                     callback(Message.from_wire(self.name, envelope, WIRE_KEY[which]))
@@ -107,7 +109,7 @@ class Handle:
         loop.add_reader(fd, on_readable)
         return fd
 
-    def write(self, which: Literal["in", "out"], msg: Message) -> bool:
+    def write(self, which: Endpoint, msg: Message) -> bool:
         """Send one message down a FIFO. Writes to `out` are mirrored to the
         log, kept even when no reader takes the FIFO write; `in` lines are
         logged by the sole reader instead."""
@@ -118,7 +120,7 @@ class Handle:
                 f.write(data)
         return ok
 
-    def _write_fifo(self, which: str, data: bytes) -> bool:
+    def _write_fifo(self, which: Endpoint, data: bytes) -> bool:
         try:
             fd = os.open(self.path / which, os.O_WRONLY | os.O_NONBLOCK)
         except OSError as e:
@@ -153,7 +155,7 @@ class Handle:
         ]
 
     def snapshot(self, name: str, text: str) -> None:
-        """Atomically rewrite a /proc-style status file (e.g. cron/schedules)."""
+        """Atomically rewrite a /proc-style snapshot file (e.g. cron/schedules)."""
         write_atomic(self.path / name, text)
 
 

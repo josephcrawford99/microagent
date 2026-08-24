@@ -99,8 +99,8 @@ class BaseAgent(ABC):
                 continue
             # The read receipt: a wake starts within `coalesce_s` of a message
             # landing, so the start of a wake is when the agent read it.
-            self.provider.on_status = partial(self.write_status, batch)
-            self.write_status(batch, self.OPENING_STATUS)
+            self.provider.on_status = partial(self.send_status, batch)
+            self.send_status(batch, self.OPENING_STATUS)
             try:
                 await self.wake(batch)
             except Exception as e:
@@ -108,7 +108,7 @@ class BaseAgent(ABC):
                 self.notify_all(batch, f"Wake failed: {e}")
             finally:
                 self.provider.on_status = ignore_status
-                self.write_status(batch, "")
+                self.send_status(batch, "")
 
     def boot(self) -> None:
         """Announce the respin, once every FIFO has its reader: a service that
@@ -151,18 +151,17 @@ class BaseAgent(ABC):
             raise LookupError(f"no such channel: {msg.channel!r}")
         svc.handle.write("in", msg)
 
-    def write_status(self, batch: Batch, text: str) -> None:
+    def send_status(self, batch: Batch, text: str) -> None:
         """Tell every channel this wake came from what the agent is doing, so
-        it can show the wait. Rides `in` like any other line the harness sends
-        a channel; what a channel makes of it is its own business, and most
-        make nothing. Empty text means the wake is over."""
+        it can show the wait. Goes to that channel's `status` handle, which
+        only a channel with somewhere to show progress has. Empty text means
+        the wake is over."""
         for channel in batch.channels:
             svc = self.get_service(channel)
-            if svc is None:
-                continue
-            svc.handle.write(
-                "in", Message(channel, batch.reply_to(channel), status=text)
-            )
+            if svc is not None and svc.shows_status:
+                svc.handle.write(
+                    "status", Message(channel, batch.reply_to(channel), text)
+                )
 
     def last_channel(self, batch: Batch) -> str:
         """Where a reply belongs when the agent didn't say"""

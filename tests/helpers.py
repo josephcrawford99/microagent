@@ -18,6 +18,11 @@ def write_in(handle: Handle, envelope: dict[str, Any]) -> bool:
     return handle.write("in", Message.from_wire(handle.name, envelope, ADDRESS))
 
 
+def write_status(handle: Handle, address: str, text: str) -> bool:
+    """Put one line on a started service's `status` FIFO."""
+    return handle.write("status", Message(handle.name, address, text))
+
+
 def write_raw(handle: Handle, which: str, data: bytes) -> None:
     """Write raw bytes to a FIFO, like an external `echo >` would."""
     fd = os.open(handle.path / which, os.O_WRONLY | os.O_NONBLOCK)

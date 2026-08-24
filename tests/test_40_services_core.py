@@ -16,7 +16,7 @@ from services.cron import Cron
 from services.web_chat import WebChat
 from lib.message import Message
 
-from helpers import next_line, write_in, write_raw
+from helpers import next_line, write_in, write_raw, write_status
 
 
 class Echo(Service):
@@ -50,7 +50,7 @@ class Shower(Service):
 
     async def handle_status(self, msg):
         await self.hold.wait()
-        self.shown.append(msg.status)
+        self.shown.append(msg.body)
         self.drawn.set()
 
 
@@ -67,16 +67,19 @@ class Ticker(Service):
         pass
 
 
-def test_shows_status_follows_the_override():
-    assert Shower("t-show", {}).shows_status is True
-    assert Echo("t-echo", {}).shows_status is False, "no handle_status, nothing to show"
+def test_the_status_handle_exists_only_where_it_can_be_shown():
+    shower, echo = Shower("t-show", {}), Echo("t-echo", {})
+    assert shower.shows_status is True
+    assert (shower.handle.path / "status").is_fifo(), "the endpoint is the capability"
+    assert echo.shows_status is False, "no handle_status, nothing to show"
+    assert not (echo.handle.path / "status").exists()
 
 
 async def test_status_reaches_a_channel_that_shows_it(harness):
     svc = Shower("t-show", {})
     await harness(svc)
 
-    assert write_in(svc.handle, {"address": "42", "status": "Bash: git log"}) is True
+    assert write_status(svc.handle, "42", "Bash: git log") is True
     await asyncio.wait_for(svc.drawn.wait(), 5)
     assert svc.shown == ["Bash: git log"]
 
@@ -84,13 +87,13 @@ async def test_status_reaches_a_channel_that_shows_it(harness):
 async def test_status_is_not_a_delivery_and_is_not_logged(harness):
     """An `in` line is mirrored to the log; a status is what the agent is doing
     this second, so it is neither delivered nor kept."""
-    svc = Echo("t-echo", {})
+    svc = Shower("t-show", {})
     q = await harness(svc)
 
-    assert write_in(svc.handle, {"address": "", "status": "Bash: git log"}) is True
+    assert write_status(svc.handle, "42", "Bash: git log") is True
     assert write_in(svc.handle, {"address": "", "body": "hi"}) is True
     line = await next_line(q)
-    assert line.body == "hi", "the status was dropped, the message got through"
+    assert line.body == "hi", "the status went elsewhere, the message got through"
     assert [e.get("body") for e in svc.handle.read_log()] == ["hi", "hi"]
 
 
@@ -101,7 +104,7 @@ async def test_a_burst_of_status_coalesces_to_the_newest(harness):
     svc.hold.clear()
 
     for text in ("first", "second", "third"):
-        write_in(svc.handle, {"address": "42", "status": text})
+        write_status(svc.handle, "42", text)
     await asyncio.sleep(0.05)
     svc.hold.set()
     await asyncio.wait_for(svc.drawn.wait(), 5)

@@ -93,11 +93,11 @@ class Telegram(Service):
         message that follows what the agent is doing."""
         if not self.token or not msg.address:
             return
-        if not msg.status:
+        if not msg.body:
             await self.clear_status(msg.address)
             return
         try:
-            await self._draw(msg.address, msg.status)
+            await self._draw(msg.address, msg.body)
         except Exception:
             # A chat that won't take the indicator won't take the next line
             # either. Take it down rather than leave a task typing at a wall.

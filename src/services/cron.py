@@ -220,7 +220,7 @@ class Cron(Service):
 
     def _persist(self) -> None:
         """One write for both records: the state file, and cron/schedules —
-        the current table as a cat-able status file, one line per entry."""
+        the current table as a cat-able snapshot file, one line per entry."""
         self.state.save({"schedules": [s.to_dict() for s in self._schedules]})
         rows = [
             f"{s.id}  {s.kind:<5}  {s.fires_at.isoformat(timespec='seconds')}  {s.reason}"

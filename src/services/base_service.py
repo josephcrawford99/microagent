@@ -2,7 +2,7 @@
 
 Subclasses set `name`, implement `handle_in()` (delivery) and whatever
 background monitoring feeds `write_out()`. A channel that can show the agent
-working also implements `handle_status()`.
+working also implements `handle_status()`, which gives it a `status` handle.
 """
 
 from __future__ import annotations
@@ -44,7 +44,9 @@ class Service:
             raise TypeError(f"{type(self).__name__} must set `name`")
         self.agent_id = agent_id
         self.config = config
-        self.handle = Handle(self.name)
+        self.handle = Handle(
+            self.name, extra=("status",) if self.shows_status else ()
+        )
         self.poll_interval_s = float(
             config.get("poll_interval_s", type(self).poll_interval_s)
         )
@@ -73,16 +75,18 @@ class Service:
 
     @property
     def shows_status(self) -> bool:
-        """True when the subclass implements `handle_status()`. A channel with
-        nowhere to show progress reads the same lines and drops them."""
+        """True when the subclass implements `handle_status()`, which is what
+        gives this channel a `status` handle to read."""
         return type(self).handle_status is not Service.handle_status
 
     async def start(self, *, poll: bool = True) -> None:
-        """Start reading `in` (the handle dir itself exists since __init__),
-        and run the poll loop when the subclass overrides `poll()` and no
-        required env var is missing. `poll=False` skips the loop."""
+        """Start reading `in`, and `status` for a channel that shows one (the
+        handle dir itself exists since __init__), and run the poll loop when
+        the subclass overrides `poll()` and no required env var is missing.
+        `poll=False` skips the loop."""
         self.handle.add_reader("in", self._on_in)
         if self.shows_status:
+            self.handle.add_reader("status", self._on_status)
             self.spawn(self._status_loop())
         if not poll or type(self).poll is Service.poll:
             return
@@ -121,12 +125,9 @@ class Service:
             await asyncio.sleep(self.poll_interval_s)
 
     def _on_in(self, msg: Message) -> None:
-        """One line off `in`. A status is the harness saying what it is doing,
-        not something to deliver, so it goes to the indicator instead."""
-        if msg.status is not None:
-            self._on_status(msg)
-        else:
-            self.spawn(self._dispatch(msg))
+        """One line off `in`, delivered on its own task so a slow send never
+        blocks the reader."""
+        self.spawn(self._dispatch(msg))
 
     async def _dispatch(self, msg: Message) -> None:
         try:
@@ -137,11 +138,8 @@ class Service:
             self.write_out(sender=self.name, body=f"error: {type(e).__name__}: {e}")
 
     def _on_status(self, msg: Message) -> None:
-        """Keep only the newest line, and only when there is somewhere to show
-        it. An indicator that falls behind the agent should catch up to now,
-        not replay a backlog."""
-        if not self.shows_status:
-            return
+        """Keep only the newest line off `status`. An indicator that falls
+        behind the agent should catch up to now, not replay a backlog."""
         self._latest_status = msg
         self._status_waiting.set()
 
@@ -166,10 +164,10 @@ class Service:
         raise NotImplementedError
 
     async def handle_status(self, msg: Message) -> None:
-        """Show that the agent is working on `address`'s message, `status`
-        being what it is doing right now. An empty `status` means the work is
-        over and whatever was shown should be taken down. Leave unimplemented
-        for a channel with nowhere to put it."""
+        """Show that the agent is working on `address`'s message, the `body`
+        being what it is doing right now. An empty body means the work is over
+        and whatever was shown should be taken down. Leave unimplemented for a
+        channel with nowhere to put it."""
 
     def write_out(self, *, sender: str, body: str) -> None:
         """Publish one inbound event on `out`, mirrored to the log."""

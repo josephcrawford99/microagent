@@ -15,7 +15,7 @@ import pytest
 from services.email import Email
 from services.telegram import Telegram
 
-from helpers import next_line, write_in
+from helpers import next_line, write_in, write_status
 
 
 def _aid(prefix: str) -> str:
@@ -61,9 +61,9 @@ def _stub_api(svc) -> list[tuple[str, dict]]:
     return calls
 
 
-async def _drawn(svc, chat_id: str, envelope: dict, pause: float = 0.05) -> None:
-    """Write one line and let the service finish with it."""
-    write_in(svc.handle, {"address": chat_id, **envelope})
+async def _drawn(svc, chat_id: str, text: str, pause: float = 0.05) -> None:
+    """Put one status line up and let the service finish with it."""
+    write_status(svc.handle, chat_id, text)
     await asyncio.sleep(pause)
 
 
@@ -82,10 +82,11 @@ async def test_telegram_status_posts_edits_then_gives_way_to_the_reply(
     """One message stands in for the wait, and the reply takes its place."""
     svc, calls = await _telegram(harness, monkeypatch)
 
-    await _drawn(svc, "42", {"status": "Read: notes.md"})
-    await _drawn(svc, "42", {"status": "Bash: git log"})
-    await _drawn(svc, "42", {"body": "here you go"})
-    await _drawn(svc, "42", {"status": ""})
+    await _drawn(svc, "42", "Read: notes.md")
+    await _drawn(svc, "42", "Bash: git log")
+    write_in(svc.handle, {"address": "42", "body": "here you go"})
+    await asyncio.sleep(0.05)
+    await _drawn(svc, "42", "")
 
     assert any(m == "sendChatAction" for m, _ in calls), "typing runs alongside"
     posted = [(m, p) for m, p in calls if m != "sendChatAction"]
@@ -103,7 +104,7 @@ async def test_telegram_status_blanks_markup_it_did_not_mean(harness, monkeypatc
     """One stray `_` in a tool argument would have telegram reject the line."""
     svc, calls = await _telegram(harness, monkeypatch)
 
-    await _drawn(svc, "42", {"status": "Bash: grep foo_bar *.py"})
+    await _drawn(svc, "42", "Bash: grep foo_bar *.py")
     posted = next(p for m, p in calls if m == "sendMessage")
     assert posted["text"] == "_Bash: grep foo bar  .py_"
 
@@ -119,7 +120,7 @@ async def test_telegram_status_gives_up_on_a_chat_that_refuses_it(
         raise RuntimeError("chat not found")
 
     svc._api = refuse
-    await _drawn(svc, "42", {"status": "Bash: git log"}, pause=0.1)
+    await _drawn(svc, "42", "Bash: git log", pause=0.1)
 
     assert svc.status == {}, "the indicator took itself down"
     before = len(calls)
@@ -131,8 +132,8 @@ async def test_telegram_status_skips_a_repeat_line(harness, monkeypatch):
     svc, calls = await _telegram(harness, monkeypatch)
 
     for _ in range(2):
-        await _drawn(svc, "42", {"status": "Bash: git log"})
-    await _drawn(svc, "42", {"status": ""})
+        await _drawn(svc, "42", "Bash: git log")
+    await _drawn(svc, "42", "")
 
     assert [m for m, _ in calls if m != "sendChatAction"] == [
         "sendMessage", "deleteMessage",

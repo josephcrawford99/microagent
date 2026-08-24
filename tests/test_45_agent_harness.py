@@ -28,7 +28,7 @@ class Listener(Service):
         super().__init__("t-agent", {})
         self.booted_at = ""
         self.delivered: list[str] = []
-        self.shown: list[tuple[str, str | None]] = []
+        self.shown: list[tuple[str, str]] = []
         self.drew = asyncio.Event()
         self.cleared = asyncio.Event()
 
@@ -43,8 +43,8 @@ class Watcher(Listener):
         self.delivered.append(msg.body)
 
     async def handle_status(self, msg):
-        self.shown.append((msg.address, msg.status))
-        (self.cleared if not msg.status else self.drew).set()
+        self.shown.append((msg.address, msg.body))
+        (self.cleared if not msg.body else self.drew).set()
 
 
 class Deaf(Listener):

@@ -78,26 +78,6 @@ def test_from_wire_ignores_extra_fields():
     assert msg == Message("email", "a@b.c", "hello")
 
 
-def test_status_and_body_are_exclusive_on_the_wire():
-    """A line is one or the other, and `status` is what says which."""
-    assert Message("telegram", "42", status="Bash: git log").to_wire(ADDRESS) == {
-        "address": "42", "status": "Bash: git log",
-    }
-    assert Message("telegram", "42", status="").to_wire(ADDRESS) == {
-        "address": "42", "status": "",
-    }, "an empty status still travels: it is what says the work is over"
-    assert Message("telegram", "42", body="hi").to_wire(ADDRESS) == {
-        "address": "42", "body": "hi",
-    }
-
-
-def test_from_wire_reads_status_by_presence():
-    plain = Message.from_wire("telegram", {"address": "42", "body": "hi"}, ADDRESS)
-    assert plain.status is None, "no status key means this is a message"
-    done = Message.from_wire("telegram", {"address": "42", "status": ""}, ADDRESS)
-    assert done.status == "", "an empty status key is a status, not a message"
-
-
 def test_prompt_line():
     msg = Message("email", "a@b.c", "hello")
     assert prompt_line(msg) == "[email] from a@b.c: hello"
