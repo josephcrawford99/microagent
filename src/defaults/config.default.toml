@@ -1,7 +1,7 @@
 # microagent configuration. Everything non-secret lives here.
 
 # IANA name, e.g. "America/New_York". Empty = whatever the host runs (UTC in
-# docker). Sets the clock for logs, cron `daily` times, and the agent itself,
+# a container). Sets the clock for logs, cron `daily` times, and the agent itself,
 # so DST is handled for you.
 timezone = ""
 
@@ -31,7 +31,7 @@ port = 8765
 [services.web_chat]
 enabled = true
 
-# Polling services (email, telegram, imessage) all pace with the same key,
+# Polling services (email, telegram) all pace with the same key,
 # `poll_interval_s` — seconds slept between fetches. Each sets its own default;
 # override here only if the default doesn't suit.
 [services.email]
@@ -50,14 +50,6 @@ allowed_chat_ids = []
 # Not poll_interval_s: this is how long telegram's server holds getUpdates open
 # waiting for a message. The client sleeps 0 between calls because of it.
 poll_timeout = 30
-
-# Receive-only feed of the host's Messages db. Default db_path is ~/Library/Messages/chat.db; 
-# in docker set it to the bind-mount: db_path = "/mnt/imessage/chat.db"
-[services.imessage]
-enabled = false
-wake = false
-# poll_interval_s = 15
-# db_path = "/mnt/imessage/chat.db"
 
 # Agent-schedulable wakes: `echo 'in 300 water plants' > <home>/run/cron/in`.
 [services.cron]

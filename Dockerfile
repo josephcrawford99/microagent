@@ -1,4 +1,4 @@
-FROM python:3.12-alpine
+FROM docker.io/library/python:3.12-alpine
 
 # bash: the claude CLI's Bash tool refuses to run without it (busybox sh is
 # not enough). tzdata: time.tzset() needs zoneinfo.

@@ -125,22 +125,22 @@ echo 'CLAUDE_CODE_OAUTH_TOKEN=...' > .env   # or skip, and use provider = "ping"
 python3 src/main.py
 ```
 
-The process exits on purpose when you hit restart/update in the dashboard, so for an always-on run wrap it in a loop (Docker's `restart: unless-stopped` does this for you):
+The process exits on purpose when you hit restart/update in the dashboard, so for an always-on run wrap it in a loop (the container's `restart: always` does this for you):
 
 ```fish
 while python3 src/main.py; sleep 1; end          # fish
 while python3 src/main.py; do sleep 1; done      # bash/zsh
 ```
 
-### Run it in Docker 
+### Run it in a container
 
 ```fish
-docker compose run --rm -it microagent claude setup-token   # get an OAuth token
+podman compose run --rm -it microagent claude setup-token   # get an OAuth token
 # put it in .env as CLAUDE_CODE_OAUTH_TOKEN=...
-docker compose up -d --build
+podman compose up -d --build
 ```
 
-`run/` is a tmpfs inside the container, so the handle tree is reached from there rather than from the host: `docker exec microagent sh -c 'echo hi > /microagent/.microagent/run/agent/in'`. On a Linux host you can drop the `tmpfs:` line from `docker-compose.yml` to get host-visible FIFOs; on macOS you can't, because FIFOs don't work over the bind mount at all.
+`docker compose` works the same. The repo is bind-mounted, so the handle tree is live on the host too: `echo hi > .microagent/run/agent/in` wakes the agent from outside the container.
 
 The dashboard listens on port 8767 (on every interface by default; set `host = "127.0.0.1"` to keep it machine-local). It is a viewer over the handle tree plus a chat pane, and it can also act: restart, update to origin/main, and rotate .env keys.
 
@@ -156,5 +156,5 @@ Live status was the test of that. Telegram showing what the agent is doing mid-w
 
 - A FIFO exchange is slower and uses more context than a structured transport like MCP.
 - The handle tree applies to only one host. Separate agents run in separate places with no problem, but they do not share a tree.
-- Docker adds its own limits to what the agent can reach.
+- The container adds its own limits to what the agent can reach.
 - The Claude OAuth token is the roughest part of setup.

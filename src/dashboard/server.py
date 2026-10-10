@@ -216,7 +216,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _exit_soon() -> None:
-        # Docker's restart policy respawns the process.
+        # The container's restart policy respawns the process.
         threading.Timer(0.5, os._exit, args=(0,)).start()
 
     def _env_save(self, body: bytes) -> None:
